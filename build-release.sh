@@ -13,7 +13,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-PLUGIN_ID="cliproxy-meter"
+PLUGIN_ID="cliproxy-speedometer"
 VERSION="${VERSION:-0.1.0}"
 # zig cc is the portable way to cross-compile cgo; a native cross gcc also works.
 CC_AMD64="${CC_AMD64:-}"

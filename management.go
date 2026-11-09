@@ -12,7 +12,7 @@ import (
 // normalizes and prefixes them. A resource path of "/" is rejected by the host
 // (it trims to empty), so the dashboard gets an explicit segment.
 const (
-	snapshotPath  = "/meter/snapshot"
+	snapshotPath  = "/speedometer/snapshot"
 	dashboardPath = "/dashboard"
 )
 
@@ -42,7 +42,7 @@ func handleManagementRegister(req []byte) ([]byte, error) {
 	if cfg.ShowDashboard {
 		resp.Resources = append(resp.Resources, resourceRoute{
 			Path:        dashboardPath,
-			Menu:        "Token Meter",
+			Menu:        "Token Speedometer",
 			Description: "Real-time tokens per second dashboard",
 		})
 	}

@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 
 VERSION="${VERSION:-0.1.0}"
 ARCH="${ARCH:-amd64}"
-OUT="cliproxy-meter-v${VERSION}.so"
+OUT="cliproxy-speedometer-v${VERSION}.so"
 
 # cgo is required: the plugin is a C ABI shared library.
 CGO_ENABLED=1 GOOS=linux GOARCH="${ARCH}" \

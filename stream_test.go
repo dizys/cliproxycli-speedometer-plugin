@@ -578,7 +578,7 @@ func TestUsageHandleSupersedesEstimate(t *testing.T) {
 
 func TestManagementRegisterDeclaresRoutes(t *testing.T) {
 	resetPlugin(t)
-	payload := []byte(`{"BasePath":"/v0/management","ResourceBasePath":"/v0/resource/plugins/cliproxy-meter"}`)
+	payload := []byte(`{"BasePath":"/v0/management","ResourceBasePath":"/v0/resource/plugins/cliproxy-speedometer"}`)
 	raw, err := handleMethod(methodManagementRegister, payload)
 	if err != nil {
 		t.Fatalf("management.register: %v", err)
@@ -600,7 +600,7 @@ func TestManagementRegisterDeclaresRoutes(t *testing.T) {
 	if len(reg.Resources) != 1 {
 		t.Fatalf("resources = %#v, want the dashboard", reg.Resources)
 	}
-	if plugin.resourceBasePath != "/v0/resource/plugins/cliproxy-meter" {
+	if plugin.resourceBasePath != "/v0/resource/plugins/cliproxy-speedometer" {
 		t.Fatalf("resourceBasePath = %q", plugin.resourceBasePath)
 	}
 }
@@ -628,7 +628,7 @@ func TestManagementHandleServesSnapshot(t *testing.T) {
 	state := plugin.store.meter()
 	state.recordFinal(makeRecord("req-1", time.Second, usageDetail{InputTokens: 10, OutputTokens: 10, TotalTokens: 20}), time.Now())
 
-	raw, err := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/v0/management/meter/snapshot"}`))
+	raw, err := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/v0/management/speedometer/snapshot"}`))
 	if err != nil {
 		t.Fatalf("management.handle: %v", err)
 	}
@@ -673,7 +673,7 @@ func TestManagementHandleServesDashboard(t *testing.T) {
 
 func TestManagementHandleRejectsUnknownPath(t *testing.T) {
 	resetPlugin(t)
-	raw, _ := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/v0/management/meter/nope"}`))
+	raw, _ := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/v0/management/speedometer/nope"}`))
 	env := decodeEnvelope(t, raw)
 	var resp managementResponse
 	if err := json.Unmarshal(env.Result, &resp); err != nil {
@@ -686,7 +686,7 @@ func TestManagementHandleRejectsUnknownPath(t *testing.T) {
 
 func TestSnapshotWindowQueryOverride(t *testing.T) {
 	resetPlugin(t)
-	raw, _ := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/meter/snapshot","Query":{"window":["10s"]}}`))
+	raw, _ := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/speedometer/snapshot","Query":{"window":["10s"]}}`))
 	body := decodeManagementBody(t, raw)
 	var payload struct {
 		Data snapshotView `json:"data"`
@@ -705,7 +705,7 @@ func TestSnapshotHidesClientLabelsWhenDisabled(t *testing.T) {
 	state := plugin.store.meter()
 	state.recordFinal(makeRecord("req-1", time.Second, usageDetail{InputTokens: 10, TotalTokens: 10}), time.Now())
 
-	raw, _ := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/meter/snapshot"}`))
+	raw, _ := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/speedometer/snapshot"}`))
 	body := decodeManagementBody(t, raw)
 	var payload struct {
 		Data snapshotView `json:"data"`

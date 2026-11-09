@@ -4,7 +4,7 @@ package main
 // self-contained document: no external scripts, fonts, or stylesheets, because
 // the resource route is unauthenticated and must not pull third-party code.
 //
-// The page renders its own JSON calls against /v0/management/meter/snapshot.
+// The page renders its own JSON calls against /v0/management/speedometer/snapshot.
 // It reuses the management key the control panel already saved in this origin's
 // localStorage, so the normal case needs no key entry at all; the key form is
 // only a fallback for when the panel was told not to remember the key, or when
@@ -16,7 +16,7 @@ const dashboardHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Meter</title>
+<title>Token Speedometer</title>
 <style>
   :root {
     color-scheme: light;
@@ -142,13 +142,13 @@ const dashboardHTML = `<!doctype html>
 <div class="wrap">
 
   <header>
-    <h1>Token meter</h1>
+    <h1>Token speedometer</h1>
     <div class="meta" id="meta">connecting</div>
   </header>
 
   <section class="card gate hidden" id="gate">
     <p id="gate-explain">The control panel did not leave a management key in this
-       browser, so the meter needs one to read the management API. It is used only
+       browser, so the speedometer needs one to read the management API. It is used only
        for the snapshot request to this server.</p>
     <label for="key">Management key</label>
     <input id="key" type="password" autocomplete="current-password" placeholder="management key">
@@ -263,8 +263,8 @@ const dashboardHTML = `<!doctype html>
 (function () {
   "use strict";
 
-  var KEY_STORE = "cpa-token-meter-key";
-  var FORGET_STORE = "cpa-token-meter-forget";
+  var KEY_STORE = "cpa-token-speedometer-key";
+  var FORGET_STORE = "cpa-token-speedometer-forget";
   var POLL_MS = 2000;
   var state = { key: null, timer: null, stopped: false, series: [], dims: null };
 
@@ -292,7 +292,7 @@ const dashboardHTML = `<!doctype html>
     var marker = "/resource/plugins/";
     var idx = path.indexOf(marker);
     if (idx < 0) return null;
-    return path.slice(0, idx) + "/management/meter/snapshot";
+    return path.slice(0, idx) + "/management/speedometer/snapshot";
   }
 
   // --- panel session -----------------------------------------------------
@@ -423,9 +423,9 @@ const dashboardHTML = `<!doctype html>
     el("streams").textContent = fmt(d.streams || 0);
     el("window-tokens").textContent = fmt((d.window || {}).tokens || 0);
     el("window-reqs").textContent = fmt((d.window || {}).requests || 0);
-    el("window-label").textContent = "billed tokens in " + fmtDur(d.window_seconds || 0);
+    el("window-label").textContent = "tokens in " + fmtDur(d.window_seconds || 0);
     el("reqs-label").textContent = "requests in " + fmtDur(d.window_seconds || 0);
-    el("meta").textContent = (p.name || "meter") + " " + (p.version || "") +
+    el("meta").textContent = (p.name || "speedometer") + " " + (p.version || "") +
       " · uptime " + fmtDur(d.uptime_seconds || 0) +
       " · window " + fmtDur(d.window_seconds || 0);
     el("updated").textContent = "updated " + new Date().toLocaleTimeString();
@@ -518,7 +518,7 @@ const dashboardHTML = `<!doctype html>
     body.textContent = "";
     var rows = [
       ["Window", d.window],
-      ["Lifetime", d.lifetime]
+      ["Since restart", d.lifetime]
     ];
     var dims = d.dimensions || {};
     Object.keys(dims).forEach(function (dim) {
@@ -801,7 +801,7 @@ const dashboardHTML = `<!doctype html>
   } else {
     el("gate-explain").textContent =
       "The control panel has not saved a management key in this browser, so the " +
-      "meter needs one to read the management API. It is used only for the " +
+      "speedometer needs one to read the management API. It is used only for the " +
       "snapshot request to this server.";
     show("gate", true);
   }

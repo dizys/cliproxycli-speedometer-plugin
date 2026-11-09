@@ -1,22 +1,24 @@
 <img src="assets/icon.svg" width="64" height="64" alt="">
 
-# CLIProxyAPI Token Meter
+# CLIProxyAPI Token Speedometer
 
 A native CLIProxyAPI plugin that shows how many tokens per second the proxy is
 serving, in real time, broken down by provider, client, model, and credential.
 
-CLIProxyAPI reports exact token usage only after a request completes, so a meter
-built on `usage.handle` alone would lurch once per request. This plugin also
-intercepts the response stream, parses the SSE deltas as they pass, and estimates
-token growth live. When the exact usage record lands, it replaces the estimate.
+CLIProxyAPI reports exact token usage only after a request completes, so a
+speedometer built on `usage.handle` alone would lurch once per request. This
+plugin also intercepts the response stream, parses the SSE deltas as they pass,
+and estimates token growth live. When the exact usage record lands, it replaces the estimate.
 The dashboard therefore shows two stacked numbers: **committed** (exact, spread
 across each request's latency) and **live** (estimated, from streams still open).
 
-![The Token Meter dashboard: a headline rate, a stacked committed-and-live chart, breakdowns by provider, model, client, and credential, open streams, and totals](docs/dashboard.png)
+![The Token Speedometer dashboard: a headline rate, a stacked committed-and-live chart, breakdowns by provider, model, client, and credential, open streams, and totals](docs/dashboard.png)
 
 The dashboard follows the system light/dark preference; [docs/dashboard-dark.png](docs/dashboard-dark.png)
-shows the dark rendering. Numbers in the screenshot come from a synthetic traffic
-fixture, not a live install.
+shows the dark rendering. The **Table view** toggle opens the same numbers as a
+table, including the per-dimension rows ([docs/dashboard-table.png](docs/dashboard-table.png)).
+Numbers in the screenshots come from a synthetic traffic fixture, not a live
+install.
 
 ## How it works
 
@@ -41,7 +43,7 @@ Every key is optional and unknown keys are ignored.
 ```yaml
 plugins:
   configs:
-    cliproxy-meter:
+    cliproxy-speedometer:
       window_seconds: 30        # committed rate horizon
       live_window_seconds: 5    # live estimate horizon
       series_seconds: 60        # chart points (one per second)
@@ -73,8 +75,8 @@ window resets; every other key takes effect without losing data.
 ## Endpoints
 
 - **Dashboard** - `/v0/resource/plugins/<plugin-id>/dashboard`, listed in the
-  plugin menu as "Token Meter". Self-contained, no external assets.
-- **Snapshot** - `GET /v0/management/meter/snapshot`, optionally with
+  plugin menu as "Token Speedometer". Self-contained, no external assets.
+- **Snapshot** - `GET /v0/management/speedometer/snapshot`, optionally with
   `?window=15s` or `?window=15`. Returns:
 
 ```json
@@ -106,14 +108,19 @@ window resets; every other key takes effect without losing data.
 (`counters.generated`): completion tokens, plus reasoning when the provider
 reports it outside the completion count. Prompt tokens are excluded.
 
-That distinction is the difference between a meter and a random number
+That distinction is the difference between a speedometer and a random number
 generator. A prompt is paid in one burst when the request starts, so dividing
 it by the request's latency invents sustained throughput: a 149k-token prompt
 answering in 5k tokens over 40 seconds reads as 3.8k tok/s of "work" while the
 model was emitting a few dozen tokens per second.
 
-`counters.tokens` remains the full billed total (prompt plus completion), so
-window and lifetime totals are complete. Only the rates narrow to generation.
+`counters.tokens` remains the full total (prompt plus completion, counted the
+way the provider bills them), so window and lifetime totals are complete. Only
+the rates narrow to generation.
+
+Both sets of totals live in memory and reset when the host restarts, or when
+`window_seconds` or `series_seconds` change. This is an instrument, not an
+accounting ledger: nothing is written to disk, priced, or reconciled.
 
 ### Why the dashboard needs a key, and when it does not
 
@@ -149,15 +156,15 @@ entered key and stops the page borrowing the panel's key again.
 ## Install
 
 The plugin is published as a GitHub release. Once its registry entry is merged,
-open **Plugin Store** in the control panel and install **Token Meter**; the host
+open **Plugin Store** in the control panel and install **Token Speedometer**; the host
 downloads the archive for its platform and verifies the checksum.
 
 Until then, install straight from the release: download
-`cliproxy-meter_<version>_linux_amd64.zip` (or the archive for your platform),
+`cliproxy-speedometer_<version>_linux_amd64.zip` (or the archive for your platform),
 unzip it, and put the library at the host's plugin root (see below).
 
-Manual install: copy `cliproxy-meter-v<version>.so` into the host's plugins
-directory (`plugins/linux/amd64/` on Linux), add a `plugins.configs.cliproxy-meter`
+Manual install: copy `cliproxy-speedometer-v<version>.so` into the host's plugins
+directory (`plugins/linux/amd64/` on Linux), add a `plugins.configs.cliproxy-speedometer`
 entry with `enabled: true`, and restart the host. The plugin id and version come
 from the filename, and the host disables any plugin that has no config entry.
 
@@ -166,7 +173,7 @@ from the filename, and the host disables any plugin that has no config entry.
 Requires Go 1.24+ and a C compiler (cgo).
 
 ```sh
-./build.sh                     # -> cliproxy-meter-v0.1.0.so (linux/amd64)
+./build.sh                     # -> cliproxy-speedometer-v0.1.0.so (linux/amd64)
 ARCH=arm64 ./build.sh          # native arm64 build
 ```
 

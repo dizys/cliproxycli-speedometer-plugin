@@ -27,9 +27,9 @@ const (
 )
 
 const (
-	pluginName   = "CLIProxyAPI Token Meter"
+	pluginName   = "CLIProxyAPI Token Speedometer"
 	pluginAuthor = "dizys"
-	pluginRepo   = "https://github.com/dizys/cliproxycli-meter-plugin"
+	pluginRepo   = "https://github.com/dizys/cliproxycli-speedometer-plugin"
 )
 
 // pluginVersion is overridden at build time with -X main.pluginVersion=<version>
@@ -102,7 +102,7 @@ func handleRegister(req []byte) ([]byte, error) {
 		}
 	}
 	if err := plugin.store.reload(lifecycle.ConfigYAML); err != nil {
-		// A malformed config must not disable metering; fall back to defaults and
+		// A malformed config must not disable the meter; fall back to defaults and
 		// keep serving rather than failing registration.
 		plugin.log("warn", "invalid plugin config, using defaults: "+err.Error())
 		_ = plugin.store.reload(nil)
@@ -381,7 +381,7 @@ func (p *pluginInstance) maybeRefreshAuthList() {
 func (p *pluginInstance) log(level, message string) {
 	payload, errMarshal := json.Marshal(map[string]any{
 		"level":   level,
-		"message": "[token-meter] " + message,
+		"message": "[token-speedometer] " + message,
 	})
 	if errMarshal != nil {
 		return
