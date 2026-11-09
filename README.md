@@ -12,6 +12,12 @@ token growth live. When the exact usage record lands, it replaces the estimate.
 The dashboard therefore shows two stacked numbers: **committed** (exact, spread
 across each request's latency) and **live** (estimated, from streams still open).
 
+![The Token Meter dashboard: a headline rate, a stacked committed-and-live chart, breakdowns by provider, model, client, and credential, open streams, and totals](docs/dashboard.png)
+
+The dashboard follows the system light/dark preference; [docs/dashboard-dark.png](docs/dashboard-dark.png)
+shows the dark rendering. Numbers in the screenshot come from a synthetic traffic
+fixture, not a live install.
+
 ## How it works
 
 | Host hook | What the plugin does |
