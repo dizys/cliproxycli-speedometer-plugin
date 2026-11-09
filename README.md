@@ -12,8 +12,6 @@ token growth live. When the exact usage record lands, it replaces the estimate.
 The dashboard therefore shows two stacked numbers: **committed** (exact, spread
 across each request's latency) and **live** (estimated, from streams still open).
 
-![Dashboard](assets/icon.svg)
-
 ## How it works
 
 | Host hook | What the plugin does |
@@ -37,7 +35,7 @@ Every key is optional and unknown keys are ignored.
 ```yaml
 plugins:
   configs:
-    cliproxycli-meter:
+    cliproxy-meter:
       window_seconds: 30        # committed rate horizon
       live_window_seconds: 5    # live estimate horizon
       series_seconds: 60        # chart points (one per second)
@@ -142,17 +140,32 @@ entered key and stops the page borrowing the panel's key again.
   execution metadata, resolved to a provider through `host.auth.list`. The
   listing is refreshed at most once a minute.
 
+## Install
+
+The plugin is published as a GitHub release. In the control panel, open
+**Plugin Store** and install **Token Meter**; the host downloads the archive for
+its platform and verifies the checksum.
+
+Manual install: copy `cliproxy-meter-v<version>.so` into the host's plugins
+directory (`plugins/linux/amd64/` on Linux), add a `plugins.configs.cliproxy-meter`
+entry with `enabled: true`, and restart the host. The plugin id and version come
+from the filename, and the host disables any plugin that has no config entry.
+
 ## Build
 
 Requires Go 1.24+ and a C compiler (cgo).
 
 ```sh
 ./build.sh                     # -> cliproxy-meter-v0.1.0.so (linux/amd64)
-ARCH=arm64 ./build.sh
+ARCH=arm64 ./build.sh          # native arm64 build
 ```
 
-Deploy by copying the `.so` into the host's plugins directory and restarting, or
-reloading plugins through the management API.
+`./build-release.sh` produces the plugin-store artifacts in `dist/`: one zip per
+platform with the library at the zip root, plus `checksums.txt`. Cross-compiling
+a c-shared library needs a compiler for the target, so the script builds
+linux/amd64 always and linux/arm64 and darwin/arm64 when their compilers are
+present. Tagging `v<version>` triggers `.github/workflows/release.yml`, which
+runs the tests, builds the artifacts, and publishes them.
 
 ## Tests
 

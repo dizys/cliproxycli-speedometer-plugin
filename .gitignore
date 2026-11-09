@@ -1,4 +1,7 @@
 # Build output
 *.so
+*.dylib
+*.dll
 *.h
 /cliproxycli-meter-plugin
+/dist/
