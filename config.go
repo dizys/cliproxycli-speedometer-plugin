@@ -88,7 +88,9 @@ type configStore struct {
 
 func newConfigStore() *configStore {
 	cfg := defaultMeterConfig()
-	return &configStore{cfg: cfg, state: newMeterState(maxDimensions)}
+	state := newMeterState(maxDimensions)
+	state.setClientLabels(cfg.ClientLabels)
+	return &configStore{cfg: cfg, state: state}
 }
 
 func (s *configStore) snapshot() (meterConfig, *meterState) {
@@ -129,6 +131,9 @@ func (s *configStore) reload(raw []byte) error {
 	if s.state == nil || resized {
 		s.state = newMeterState(maxDimensions)
 	}
+	// Apply the label switch to the state itself, so turning labels off both
+	// stops collecting them and drops any already held.
+	s.state.setClientLabels(cfg.ClientLabels)
 	return nil
 }
 

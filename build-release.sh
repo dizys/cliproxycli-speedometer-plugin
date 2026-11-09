@@ -1,70 +1,207 @@
 #!/usr/bin/env bash
 # Build the release artifacts the CLIProxyAPI plugin store expects.
 #
-# Each platform ships one zip holding the shared library at the zip root, plus a
-# single sha256sum-format checksums.txt covering every zip. The plugin store
-# picks the archive named <id>_<version>_<goos>_<goarch>.zip from the release
-# whose tag is v<version>.
+# The store requires one archive per supported platform:
 #
-# Cross-compiling a c-shared library needs a C toolchain for the target. The
-# script builds linux/amd64, linux/arm64 and darwin/arm64 and skips any platform
-# whose toolchain is missing, so a bare checkout still produces a release.
+#   cliproxy-speedometer_<version>_<goos>_<goarch>.zip
+#
+# for darwin/amd64, darwin/arm64, linux/amd64, linux/arm64 and windows/amd64,
+# plus one sha256sum-format checksums.txt. Each archive holds the versioned
+# library at its root: cliproxy-speedometer-v<version>.<ext>.
+#
+# Every required platform is mandatory. A missing toolchain is an error, never a
+# silent skip: a release that quietly drops a platform is exactly the failure
+# this script exists to prevent. Build darwin targets on macOS (there is no
+# portable cross toolchain for them), windows on Windows or with mingw, and
+# linux/arm64 with aarch64-linux-gnu-gcc.
+#
+# Usage:
+#   ./build-release.sh                    build every platform, then package
+#   TARGET=linux/amd64 ./build-release.sh build one platform into dist/lib/
+#   ./build-release.sh --package          package the libraries already built
+#
+# Environment:
+#   VERSION   release version without the leading v (default: 0.1.1)
+#   OUT_DIR   output directory (default: dist)
+#   CC_<goos>_<goarch>   override the compiler for one platform, for example
+#                        CC_linux_arm64=aarch64-linux-gnu-gcc
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 PLUGIN_ID="cliproxy-speedometer"
-VERSION="${VERSION:-0.1.0}"
-# zig cc is the portable way to cross-compile cgo; a native cross gcc also works.
-CC_AMD64="${CC_AMD64:-}"
-CC_ARM64="${CC_ARM64:-aarch64-linux-gnu-gcc}"
-CC_DARWIN_ARM64="${CC_DARWIN_ARM64:-aarch64-apple-darwin-clang}"
-
+VERSION="${VERSION:-0.1.1}"
+VERSION="${VERSION#v}"
 OUT_DIR="${OUT_DIR:-dist}"
-rm -rf "${OUT_DIR}"
-mkdir -p "${OUT_DIR}/tmp"
+LIB_DIR="${OUT_DIR}/lib"
+
+PLATFORMS=(
+    darwin/amd64
+    darwin/arm64
+    linux/amd64
+    linux/arm64
+    windows/amd64
+)
+
+lib_ext() {
+    case "$1" in
+        darwin) echo ".dylib" ;;
+        windows) echo ".dll" ;;
+        *) echo ".so" ;;
+    esac
+}
 
 have_cc() {
     command -v "$1" >/dev/null 2>&1
 }
 
-build_platform() {
-    local goos="$1" goarch="$2" cc="$3"
-    local lib_ext=".so"
-    [ "${goos}" = "darwin" ] && lib_ext=".dylib"
+# cc_candidates lists the compilers to try for a platform, best first. An
+# explicit CC_<goos>_<goarch> wins; then the host compiler on the host platform;
+# then known cross compilers by name. Every candidate is probed with command -v,
+# so a name that does not exist on a particular runner is skipped rather than
+# assumed.
+cc_candidates() {
+    local goos="$1" goarch="$2" host_os host_arch
+    host_os="$(go env GOHOSTOS)"
+    host_arch="$(go env GOHOSTARCH)"
 
-    if [ -n "${cc}" ] && ! have_cc "${cc}"; then
-        echo "skip ${goos}/${goarch}: compiler ${cc} not found" >&2
+    local override="CC_${goos}_${goarch}"
+    if [ -n "${!override:-}" ]; then
+        echo "${!override}"
+        return
+    fi
+
+    if [ "${goos}" = "${host_os}" ] && [ "${goarch}" = "${host_arch}" ]; then
+        case "${goos}" in
+            windows) echo "x86_64-w64-mingw32-gcc gcc cc" ;;
+            *) echo "${CC:-cc} gcc" ;;
+        esac
+        return
+    fi
+
+    case "${goos}/${goarch}" in
+        linux/arm64) echo "aarch64-linux-gnu-gcc" ;;
+        windows/amd64) echo "x86_64-w64-mingw32-gcc" ;;
+        darwin/*) echo "clang" ;;
+        *) echo "" ;;
+    esac
+}
+
+build_one() {
+    local platform="$1" goos goarch cc="" candidate stage lib
+    goos="${platform%%/*}"
+    goarch="${platform##*/}"
+
+    for candidate in $(cc_candidates "${goos}" "${goarch}"); do
+        if have_cc "${candidate}"; then
+            cc="${candidate}"
+            break
+        fi
+    done
+
+    if [ -z "${cc}" ]; then
+        echo "error: ${platform}: no compiler found (tried: $(cc_candidates "${goos}" "${goarch}"))" >&2
+        echo "       install one or set CC_${goos}_${goarch}" >&2
+        return 1
+    fi
+
+    stage="${LIB_DIR}/${goos}_${goarch}"
+    mkdir -p "${stage}"
+    lib="${PLUGIN_ID}-v${VERSION}$(lib_ext "${goos}")"
+
+    echo "building ${platform} with ${cc}"
+    CC="${cc}" CGO_ENABLED=1 GOOS="${goos}" GOARCH="${goarch}" \
+        go build -trimpath -buildmode=c-shared \
+        -ldflags "-s -w -X main.pluginVersion=${VERSION}" \
+        -o "${stage}/${lib}" .
+
+    # A build can succeed and still produce the wrong format when the compiler
+    # ignores GOOS, so check the binary itself.
+    go version -m "${stage}/${lib}" >/dev/null 2>&1 || {
+        echo "error: ${platform}: ${lib} is not a readable Go binary" >&2
+        return 1
+    }
+    # c-shared also emits a C header beside the library. It is not part of the
+    # release and must not reach the archive.
+    rm -f "${stage%/}/${lib%.*}.h"
+    echo "built ${stage}/${lib} ($(wc -c <"${stage}/${lib}") bytes)"
+}
+
+# package_all zips every built library and fails unless all required platforms
+# are present. Publishing an incomplete matrix is never a valid outcome.
+package_all() {
+    local missing=() platform goos goarch lib zip_name
+
+    for platform in "${PLATFORMS[@]}"; do
+        goos="${platform%%/*}"
+        goarch="${platform##*/}"
+        lib="${LIB_DIR}/${goos}_${goarch}/${PLUGIN_ID}-v${VERSION}$(lib_ext "${goos}")"
+        if [ ! -f "${lib}" ]; then
+            missing+=("${platform}")
+        fi
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+        echo "error: missing libraries for: ${missing[*]}" >&2
+        echo "       build each one with TARGET=<goos>/<goarch> ./build-release.sh" >&2
+        return 1
+    fi
+
+    for platform in "${PLATFORMS[@]}"; do
+        goos="${platform%%/*}"
+        goarch="${platform##*/}"
+        lib="${PLUGIN_ID}-v${VERSION}$(lib_ext "${goos}")"
+        zip_name="${PLUGIN_ID}_${VERSION}_${goos}_${goarch}.zip"
+        rm -f "${OUT_DIR}/${zip_name}"
+        # Build the archive from inside the platform directory so the library
+        # lands at the zip root, which is what the host installer requires.
+        (cd "${LIB_DIR}/${goos}_${goarch}" && zip -q -X "../../${zip_name}" "${lib}")
+        echo "packaged ${OUT_DIR}/${zip_name}"
+    done
+
+    # The host looks checksums up by exact asset name, so no "./" prefix.
+    (cd "${OUT_DIR}" && sha256sum ./*.zip | sed 's|  \./|  |' >checksums.txt)
+    echo "---"
+    (cd "${OUT_DIR}" && ls -l ./*.zip checksums.txt)
+}
+
+usage() {
+    # Print the comment header, stopping at the first non-comment line.
+    awk '/^#!/ { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+
+main() {
+    local arg="${1:-}"
+
+    if [ "${arg}" = "-h" ] || [ "${arg}" = "--help" ]; then
+        usage
         return 0
     fi
 
-    local stage="${OUT_DIR}/tmp/${goos}_${goarch}"
-    mkdir -p "${stage}"
-    # The zip must contain the versioned library name at its root:
-    # <id>-v<version>.<ext> for version-matched installs.
-    local lib="${PLUGIN_ID}-v${VERSION}${lib_ext}"
+    mkdir -p "${OUT_DIR}"
 
-    echo "building ${goos}/${goarch} with ${cc:-default cc}"
-    CC="${cc}" CGO_ENABLED=1 GOOS="${goos}" GOARCH="${goarch}" \
-        go build -trimpath -buildmode=c-shared -ldflags "-s -w -X main.pluginVersion=${VERSION}" -o "${stage}/${lib}" .
+    if [ "${arg}" = "--package" ]; then
+        package_all
+        return
+    fi
 
-    local zip_name="${PLUGIN_ID}_${VERSION}_${goos}_${goarch}.zip"
-    (cd "${stage}" && zip -q -X "../${zip_name}" "${lib}")
-    mv "${OUT_DIR}/tmp/${zip_name}" "${OUT_DIR}/${zip_name}"
+    if [ -n "${TARGET:-}" ]; then
+        build_one "${TARGET}"
+        return
+    fi
+
+    # No target: build everything, failing on any missing toolchain rather than
+    # producing a partial release.
+    local failed=() platform
+    for platform in "${PLATFORMS[@]}"; do
+        if ! build_one "${platform}"; then
+            failed+=("${platform}")
+        fi
+    done
+    if [ "${#failed[@]}" -gt 0 ]; then
+        echo "error: could not build: ${failed[*]}" >&2
+        return 1
+    fi
+    package_all
 }
 
-build_platform linux amd64 "${CC_AMD64}"
-build_platform linux arm64 "${CC_ARM64}"
-build_platform darwin arm64 "${CC_DARWIN_ARM64}"
-
-rm -rf "${OUT_DIR}/tmp"
-
-if ! ls "${OUT_DIR}"/*.zip >/dev/null 2>&1; then
-    echo "no archives built; install a cross compiler (aarch64-linux-gnu-gcc) or build on the target" >&2
-    exit 1
-fi
-
-# The host looks checksums up by exact asset name, so no "./" prefix.
-(cd "${OUT_DIR}" && sha256sum ./*.zip | sed 's|  \./|  |' > checksums.txt)
-echo "---"
-(cd "${OUT_DIR}" && ls -l ./*.zip checksums.txt)
+main "$@"

@@ -396,7 +396,11 @@ type meterState struct {
 	// authKey -> provider, learned from host.auth.list.
 	authProvider map[string]string
 	// caller-scope hash -> masked client label, learned from usage records.
+	// Only populated while labels are enabled; see setClientLabels.
 	clientLabel map[string]string
+	// labels enables recording into clientLabel. When false, no label is
+	// derived or retained, so a disabled feature leaves nothing to disclose.
+	labels bool
 
 	startedAt time.Time
 }
@@ -411,7 +415,20 @@ func newMeterState(maxDimensions int) *meterState {
 		traceIndex:   make(map[string]string),
 		authProvider: make(map[string]string),
 		clientLabel:  make(map[string]string),
+		labels:       true,
 		startedAt:    time.Now(),
+	}
+}
+
+// setClientLabels enables or disables label collection. Turning it off drops
+// every label already derived, so the map holds no key material while the
+// feature is disabled.
+func (m *meterState) setClientLabels(enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.labels = enabled
+	if !enabled && len(m.clientLabel) > 0 {
+		m.clientLabel = make(map[string]string)
 	}
 }
 
@@ -512,8 +529,16 @@ func (m *meterState) clientKeyFor(apiKey string) string {
 	}
 	scope := callerScope(apiKey)
 	m.mu.Lock()
-	if _, ok := m.clientLabel[scope]; !ok {
-		m.clientLabel[scope] = maskKey(apiKey)
+	// The raw key never leaves this function. A label is derived and stored only
+	// when the feature is on and the mask actually hides part of the key;
+	// recording an empty string would mark the scope as seen with nothing to
+	// show, so the map holds only real labels.
+	if m.labels {
+		if _, ok := m.clientLabel[scope]; !ok {
+			if label := maskKey(apiKey); label != "" {
+				m.clientLabel[scope] = label
+			}
+		}
 	}
 	m.mu.Unlock()
 	return scope
@@ -529,16 +554,27 @@ func callerScope(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// Label geometry. A label shows this many leading and trailing characters of a
+// key, and only when doing so hides at least twice as much as it reveals.
+const (
+	maskPrefixRunes = 6
+	maskSuffixRunes = 4
+)
+
+// maskKey builds a display label for a client key. It reveals a fixed prefix and
+// suffix only when the characters left hidden are at least twice the number
+// shown, so a label identifies a key without describing a usable fraction of
+// it. Shorter keys get no label at all: at those lengths any prefix/suffix pair
+// hands over too much of the key. An empty label is safe everywhere, because the
+// dashboard and the snapshot both fall back to the caller-scope hash, which
+// cannot be reversed into the key.
 func maskKey(key string) string {
 	runes := []rune(key)
-	switch {
-	case len(runes) > 14:
-		return string(runes[:6]) + "..." + string(runes[len(runes)-4:])
-	case len(runes) > 6:
-		return string(runes[:3]) + "..." + string(runes[len(runes)-2:])
-	default:
-		return "key:" + string(runes)
+	shown := maskPrefixRunes + maskSuffixRunes
+	if len(runes) < 3*shown {
+		return ""
 	}
+	return string(runes[:maskPrefixRunes]) + "..." + string(runes[len(runes)-maskSuffixRunes:])
 }
 
 // beginStream registers an open stream on first sight of a request ID and

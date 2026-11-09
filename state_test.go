@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // base is a fixed instant so bucket arithmetic is deterministic.
@@ -187,7 +189,7 @@ func makeRecord(requestID string, latency time.Duration, detail usageDetail) usa
 		TraceID:     "trace-" + requestID,
 		Provider:    "claude",
 		Model:       "claude-sonnet-5-5",
-		APIKey:      "sk-test-key-abcdefghijklmnop",
+		APIKey:      "sk-test-key-abcdefghijklmnopqrstuvwx",
 		AuthID:      "auth-1",
 		AuthIndex:   "7",
 		RequestedAt: base.Add(-latency),
@@ -250,7 +252,7 @@ func TestRecordFinalAttributesDimensions(t *testing.T) {
 		t.Fatalf("auth tokens = %d, want 15", got)
 	}
 	// The client dimension is keyed by the same hash the host publishes live.
-	clientKey := callerScope("sk-test-key-abcdefghijklmnop")
+	clientKey := callerScope("sk-test-key-abcdefghijklmnopqrstuvwx")
 	if got := byName("client")[clientKey]; got != 15 {
 		t.Fatalf("client tokens = %d, want 15", got)
 	}
@@ -277,14 +279,72 @@ func TestClientKeyMatchesHostCallerScope(t *testing.T) {
 	}
 }
 
-func TestMaskKeyHidesMostOfTheValue(t *testing.T) {
-	key := "sk-1234567890abcdef"
-	masked := maskKey(key)
-	if len(masked) >= len(key) {
-		t.Fatalf("masked %q is not shorter than the key", masked)
+// TestMaskKeyNeverReturnsTheKey is the regression test for the credential
+// disclosure: every input length must produce a label that omits part of the
+// key, never the whole key back. The boundary sweep covers ASCII, multi-byte
+// Unicode, and mixed scripts, because the rune count rather than the byte count
+// decides the branch.
+func TestMaskKeyNeverReturnsTheKey(t *testing.T) {
+	samples := []string{
+		"a", "ab", "abc", "abcd", "abcde", "abcdef", "abcdefg", "abcdefgh",
+		"abcdefghi", "abcdefghij", "abcdefghijk", "abcdefghijkl",
+		"abcdefghijklm", "abcdefghijklmnopqrst",
+		"sk-1234567890abcdef",
+		"密钥", "密钥一二", "密钥一二三四", "密钥一二三四五六", "密钥一二三四五六七八",
+		"ключ-1234567890abcd", "키-abc-1234567890",
+		"a1b2c3d4e5f6g7h8i9j0",
 	}
-	if masked[len(masked)-4:] != key[len(key)-4:] {
-		t.Fatalf("masked %q should keep the last four characters", masked)
+	for _, key := range samples {
+		label := maskKey(key)
+		if label == "" {
+			continue
+		}
+		// The whole key must not appear in the label, in any position.
+		if strings.Contains(label, key) {
+			t.Fatalf("maskKey(%q) = %q, which contains the whole key", key, label)
+		}
+		// A label must be strictly shorter than the key it describes.
+		if utf8.RuneCountInString(label) >= utf8.RuneCountInString(key) {
+			t.Fatalf("maskKey(%q) = %q, not shorter than the key", key, label)
+		}
+	}
+}
+
+// TestMaskKeyRevealsLessThanItHides pins the actual invariant: a label may only
+// exist when the characters it hides are at least as many as the ones it shows.
+func TestMaskKeyRevealsLessThanItHides(t *testing.T) {
+	for n := 0; n <= 40; n++ {
+		key := strings.Repeat("k", n) + string(rune('0'+n%10))
+		label := maskKey(key)
+		if label == "" {
+			continue
+		}
+		shown := utf8.RuneCountInString(label) - len("...")
+		hidden := utf8.RuneCountInString(key) - shown
+		if hidden < 2*shown {
+			t.Fatalf("maskKey(len %d) = %q shows %d runes and hides %d", n, label, shown, hidden)
+		}
+	}
+}
+
+func TestMaskKeyFormatForLongKey(t *testing.T) {
+	// 30 runes is the shortest key that still gets a label: 10 shown, 20 hidden.
+	key := "sk-1234567890abcdefghijklmnopq"
+	if label := maskKey(key); label != "sk-123...nopq" {
+		t.Fatalf("maskKey(%q) = %q, want sk-123...nopq", key, label)
+	}
+	if got := maskKey("sk-1234567890abcdefghijklmnop"); got != "" {
+		t.Fatalf("29-rune key produced label %q, want none", got)
+	}
+}
+
+// TestShortKeysProduceNoLabel covers the exact bug: a seven-rune key used to
+// come back as "key:" plus the key itself.
+func TestShortKeysProduceNoLabel(t *testing.T) {
+	for _, key := range []string{"abc", "abcdef", "abcdefg", "密钥一二"} {
+		if label := maskKey(key); label != "" {
+			t.Fatalf("maskKey(%q) = %q, want no label", key, label)
+		}
 	}
 }
 

@@ -146,9 +146,14 @@ entered key and stops the page borrowing the panel's key again.
 
 ## Privacy
 
-- `usage.handle` exposes the real client `APIKey`. It is only ever hashed with
-  the host's own caller-scope algorithm and, if enabled, shown masked (`sk-abc...wxyz`).
-  The raw key is never stored, logged, or emitted.
+- `usage.handle` exposes the real client `APIKey`. It is hashed with the host's
+  own caller-scope algorithm and only the hash is kept as the dimension key. The
+  raw key is never stored, logged, or emitted.
+- A masked label (`sk-abc...wxyz`) is derived only when `client_labels` is on and
+  only when the key is long enough that the characters shown are fewer than the
+  characters hidden. Short keys get no label at all and are identified by hash
+  alone. Turning `client_labels` off stops labels being derived and drops any
+  already held.
 - Live attribution uses `selected_auth_id` / `selected_auth_index` from the
   execution metadata, resolved to a provider through `host.auth.list`. The
   listing is refreshed at most once a minute.
@@ -160,8 +165,8 @@ open **Plugin Store** in the control panel and install **Token Speedometer**; th
 downloads the archive for its platform and verifies the checksum.
 
 Until then, install straight from the release: download
-`cliproxy-speedometer_<version>_linux_amd64.zip` (or the archive for your platform),
-unzip it, and put the library at the host's plugin root (see below).
+`cliproxy-speedometer_<version>_<goos>_<goarch>.zip` for your platform, unzip it,
+and put the library at the host's plugin root (see below).
 
 Manual install: copy `cliproxy-speedometer-v<version>.so` into the host's plugins
 directory (`plugins/linux/amd64/` on Linux), add a `plugins.configs.cliproxy-speedometer`
@@ -173,16 +178,27 @@ from the filename, and the host disables any plugin that has no config entry.
 Requires Go 1.24+ and a C compiler (cgo).
 
 ```sh
-./build.sh                     # -> cliproxy-speedometer-v0.1.0.so (linux/amd64)
+./build.sh                     # -> cliproxy-speedometer-v0.1.1.so (linux/amd64)
 ARCH=arm64 ./build.sh          # native arm64 build
 ```
 
 `./build-release.sh` produces the plugin-store artifacts in `dist/`: one zip per
-platform with the library at the zip root, plus `checksums.txt`. Cross-compiling
-a c-shared library needs a compiler for the target, so the script builds
-linux/amd64 always and linux/arm64 and darwin/arm64 when their compilers are
-present. Tagging `v<version>` triggers `.github/workflows/release.yml`, which
-runs the tests, builds the artifacts, and publishes them.
+platform with the library at the zip root, plus `checksums.txt`. The store
+requires all five supported platforms, so the script treats each one as
+mandatory and fails rather than skipping a platform whose compiler is missing:
+
+| Platform | Compiler |
+|---|---|
+| darwin/amd64, darwin/arm64 | `clang` on macOS (no portable cross toolchain exists) |
+| linux/amd64 | host `cc` |
+| linux/arm64 | `aarch64-linux-gnu-gcc` |
+| windows/amd64 | `x86_64-w64-mingw32-gcc` |
+
+`TARGET=<goos>/<goarch> ./build-release.sh` builds one platform, and
+`./build-release.sh --package` zips whatever has been built, failing unless the
+whole matrix is present. Tagging `v<version>` triggers
+`.github/workflows/release.yml`, which runs the tests, builds each platform on a
+matching runner, verifies the asset matrix, and publishes the release.
 
 ## Tests
 

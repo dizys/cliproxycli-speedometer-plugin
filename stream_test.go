@@ -720,6 +720,76 @@ func TestSnapshotHidesClientLabelsWhenDisabled(t *testing.T) {
 	}
 }
 
+// TestDisabledLabelsRetainNothing covers the retention half of the disclosure:
+// suppressing the output is not enough, the label must never be derived or kept
+// while the feature is off.
+func TestDisabledLabelsRetainNothing(t *testing.T) {
+	resetPlugin(t)
+	_ = plugin.store.reload([]byte("client_labels: false\n"))
+	state := plugin.store.meter()
+
+	state.recordFinal(makeRecord("req-1", time.Second, usageDetail{InputTokens: 10, TotalTokens: 10}), time.Now())
+
+	state.mu.Lock()
+	held := len(state.clientLabel)
+	enabled := state.labels
+	state.mu.Unlock()
+	if enabled {
+		t.Fatal("label collection should be off")
+	}
+	if held != 0 {
+		t.Fatalf("label map holds %d entries while labels are disabled", held)
+	}
+}
+
+// TestDisablingLabelsDropsExistingOnes covers a reload from on to off: labels
+// collected earlier must not survive the switch.
+func TestDisablingLabelsDropsExistingOnes(t *testing.T) {
+	resetPlugin(t)
+	state := plugin.store.meter()
+	state.recordFinal(makeRecord("req-1", time.Second, usageDetail{InputTokens: 10, TotalTokens: 10}), time.Now())
+
+	state.mu.Lock()
+	before := len(state.clientLabel)
+	state.mu.Unlock()
+	if before == 0 {
+		t.Fatal("enabled labels should have been collected for a long key")
+	}
+
+	_ = plugin.store.reload([]byte("client_labels: false\n"))
+	state.mu.Lock()
+	after := len(state.clientLabel)
+	state.mu.Unlock()
+	if after != 0 {
+		t.Fatalf("label map still holds %d entries after disabling", after)
+	}
+}
+
+// TestShortClientKeyKeepsNoLabel is the end-to-end regression for the reported
+// bug: a short key must not appear in the snapshot in any form.
+func TestShortClientKeyKeepsNoLabel(t *testing.T) {
+	resetPlugin(t)
+	state := plugin.store.meter()
+
+	shortKey := "abc123"
+	rec := makeRecord("req-1", time.Second, usageDetail{InputTokens: 10, TotalTokens: 10})
+	rec.APIKey = shortKey
+	state.recordFinal(rec, base)
+
+	view := state.snapshot(base, defaultMeterConfig(), 30*time.Second)
+	if len(view.Dimensions["client"]) == 0 {
+		t.Fatal("expected a client dimension row")
+	}
+	for _, item := range view.Dimensions["client"] {
+		if strings.Contains(item.Label, shortKey) {
+			t.Fatalf("client label %q contains the whole key", item.Label)
+		}
+		if strings.Contains(item.Name, shortKey) {
+			t.Fatalf("client name %q contains the whole key", item.Name)
+		}
+	}
+}
+
 // --- helpers --------------------------------------------------------------
 
 func decodeEnvelope(t *testing.T, raw []byte) envelope {
