@@ -142,9 +142,13 @@ entered key and stops the page borrowing the panel's key again.
 
 ## Install
 
-The plugin is published as a GitHub release. In the control panel, open
-**Plugin Store** and install **Token Meter**; the host downloads the archive for
-its platform and verifies the checksum.
+The plugin is published as a GitHub release. Once its registry entry is merged,
+open **Plugin Store** in the control panel and install **Token Meter**; the host
+downloads the archive for its platform and verifies the checksum.
+
+Until then, install straight from the release: download
+`cliproxy-meter_<version>_linux_amd64.zip` (or the archive for your platform),
+unzip it, and put the library at the host's plugin root (see below).
 
 Manual install: copy `cliproxy-meter-v<version>.so` into the host's plugins
 directory (`plugins/linux/amd64/` on Linux), add a `plugins.configs.cliproxy-meter`
