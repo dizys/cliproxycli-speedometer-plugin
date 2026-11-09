@@ -176,3 +176,7 @@ go test ./...
 Covers the ring/spread accounting, live-vs-committed rate split, dimension
 overflow, SSE parsing for OpenAI/Anthropic/Gemini dialects, config clamping, and
 the envelope shape of every RPC method.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
