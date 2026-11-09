@@ -22,7 +22,7 @@ jobs:
         run: go test ./...
 
       - name: Install cross compiler
-        run: sudo apt-get update && sudo apt-get install -y aarch64-linux-gnu-gcc zip
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu zip
 
       - name: Build release assets
         env:
