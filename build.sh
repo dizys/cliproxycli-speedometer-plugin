@@ -13,6 +13,6 @@ OUT="cliproxy-meter-v${VERSION}.so"
 
 # cgo is required: the plugin is a C ABI shared library.
 CGO_ENABLED=1 GOOS=linux GOARCH="${ARCH}" \
-    go build -trimpath -buildmode=c-shared -ldflags "-s -w" -o "${OUT}" .
+    go build -trimpath -buildmode=c-shared -ldflags "-s -w -X main.pluginVersion=${VERSION}" -o "${OUT}" .
 
 echo "built ${OUT}"

@@ -27,11 +27,15 @@ const (
 )
 
 const (
-	pluginName    = "CLIProxyAPI Token Meter"
-	pluginVersion = "0.1.0"
-	pluginAuthor  = "dizys"
-	pluginRepo    = "https://github.com/dizys/cliproxycli-meter-plugin"
+	pluginName   = "CLIProxyAPI Token Meter"
+	pluginAuthor = "dizys"
+	pluginRepo   = "https://github.com/dizys/cliproxycli-meter-plugin"
 )
+
+// pluginVersion is overridden at build time with -X main.pluginVersion=<version>
+// so the version a release reports matches its filename and release tag. The
+// fallback only applies to a bare `go build`.
+var pluginVersion = "0.1.0"
 
 // plugin is the process-wide singleton. The host loads one shared library per
 // plugin instance, so package-level state is the correct scope.

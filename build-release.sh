@@ -46,7 +46,7 @@ build_platform() {
 
     echo "building ${goos}/${goarch} with ${cc:-default cc}"
     CC="${cc}" CGO_ENABLED=1 GOOS="${goos}" GOARCH="${goarch}" \
-        go build -trimpath -buildmode=c-shared -ldflags "-s -w" -o "${stage}/${lib}" .
+        go build -trimpath -buildmode=c-shared -ldflags "-s -w -X main.pluginVersion=${VERSION}" -o "${stage}/${lib}" .
 
     local zip_name="${PLUGIN_ID}_${VERSION}_${goos}_${goarch}.zip"
     (cd "${stage}" && zip -q -X "../${zip_name}" "${lib}")
