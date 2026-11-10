@@ -853,8 +853,11 @@ func TestFullStreamLifecycle(t *testing.T) {
 	if view.Streams != 1 {
 		t.Fatalf("streams = %d, want 1 mid-flight", view.Streams)
 	}
-	if view.Inflight[0].Provider != "auth-openai" {
-		t.Fatalf("provider = %q, want the selected auth id before resolution", view.Inflight[0].Provider)
+	// Before completion the estimate is visible as a live stream. The metadata
+	// names an auth id with no listing and no request-time provider, so the row
+	// carries no provider rather than echoing the credential id.
+	if view.Inflight[0].Provider != "" {
+		t.Fatalf("provider = %q, want empty until the auth directory resolves it", view.Inflight[0].Provider)
 	}
 
 	completion := requestCompletion{
@@ -989,5 +992,37 @@ func TestDashboardRequiresRememberedPanelKey(t *testing.T) {
 	// being present.
 	if !strings.Contains(body, "savedKey && panelRemembered()") {
 		t.Fatal("dashboard does not require the remembered flag before reusing the key")
+	}
+}
+
+// The bar length and the number printed beside it must come from the same
+// counter. Sizing a bar from the committed total while printing a rate that
+// includes the live estimate lets a row be shorter than its own label claims.
+func TestDashboardSizesBarsFromThePrintedRate(t *testing.T) {
+	resetPlugin(t)
+	if _, err := handleMethod(methodManagementRegister, []byte(`{"BasePath":"/v0/management","ResourceBasePath":"/v0/resource/plugins/x"}`)); err != nil {
+		t.Fatalf("management.register: %v", err)
+	}
+	raw, err := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/v0/resource/plugins/x/dashboard"}`))
+	if err != nil {
+		t.Fatalf("management.handle: %v", err)
+	}
+	env := decodeEnvelope(t, raw)
+	var resp managementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	body := string(resp.Body)
+
+	if !strings.Contains(body, "(rate / max) * 100") {
+		t.Fatal("bars are not sized from the rate the row prints")
+	}
+	if strings.Contains(body, "(tokens / max) * 100") {
+		t.Fatal("bars are still sized from the committed counter")
+	}
+	// The in-flight column reports current pace, which is the only figure that
+	// reconciles with the headline live estimate.
+	if !strings.Contains(body, "r.live_per_second") {
+		t.Fatal("in-flight table does not print the live pace")
 	}
 }

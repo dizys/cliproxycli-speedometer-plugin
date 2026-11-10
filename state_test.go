@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -619,11 +620,12 @@ func TestProviderLabelResolution(t *testing.T) {
 	if got := m.providerLabelLocked(m.inflight["req-3"]); got != "" {
 		t.Fatalf("providerLabel = %q, want empty", got)
 	}
-	// An auth key that the directory has not resolved yet is shown as itself, so
-	// the stream still appears under a stable provider bucket.
+	// An auth key that the directory has not resolved yet is not shown at all:
+	// the credential id is not a provider name, and printing it in the provider
+	// column would disclose an identifier the column never promised.
 	m.beginStream("req-4", "", "", "auth-9", "", "", base)
-	if got := m.providerLabelLocked(m.inflight["req-4"]); got != "auth-9" {
-		t.Fatalf("providerLabel = %q, want the unresolved auth key", got)
+	if got := m.providerLabelLocked(m.inflight["req-4"]); got != "" {
+		t.Fatalf("providerLabel = %q, want empty rather than the auth key", got)
 	}
 }
 func TestSnapshotIsJSONSerializable(t *testing.T) {
@@ -645,22 +647,107 @@ func TestSnapshotIsJSONSerializable(t *testing.T) {
 	}
 }
 
-func TestMergeLiveOrdersByGeneratedRate(t *testing.T) {
+func TestMergeLiveOrdersByRate(t *testing.T) {
 	items := []dimensionTotal{
 		{Name: "prompt-heavy", Counters: counters{Input: 90000, Output: 1000, Gen: 1000, Tokens: 91000}},
 		{Name: "fast", Counters: counters{Input: 100, Output: 4000, Gen: 4000, Tokens: 4100}},
 	}
-	merged := mergeLive(items, map[string]int64{"flowing": 9000}, 10*time.Second)
+	merged := mergeLive(items, map[string]int64{"flowing": 9000}, 10*time.Second, 5*time.Second)
 
 	if len(merged) != 3 {
 		t.Fatalf("merged = %#v, want three rows", merged)
 	}
-	// The live-only row ranks on its own generated count, which is what the
-	// dashboard prints for it.
+	// The live-only row ranks on the rate it prints, which weights its count by
+	// the live window it was measured over.
 	if merged[0].Name != "flowing" {
-		t.Fatalf("first row = %q, want the highest generation rate", merged[0].Name)
+		t.Fatalf("first row = %q, want the highest rate", merged[0].Name)
 	}
 	if merged[1].Name != "fast" {
 		t.Fatalf("second row = %q, want fast ahead of prompt-heavy", merged[1].Name)
+	}
+}
+
+// A live estimate is summed over the live window, so it must be divided by that
+// horizon. Dividing it by the display window instead reports a running stream
+// at a fraction of its pace: 500 tokens over the last 5 seconds is 100 tok/s,
+// not 16.7.
+func TestMergeLiveWeightsByItsOwnWindow(t *testing.T) {
+	items := []dimensionTotal{
+		{Name: "claude", Counters: counters{Gen: 9000}},
+	}
+	merged := mergeLive(items, map[string]int64{"claude": 500}, 30*time.Second, 5*time.Second)
+	if got := merged[0].Rate; math.Abs(got-400) > 0.001 {
+		t.Fatalf("rate = %v, want 300 committed + 100 live = 400", got)
+	}
+	// The committed counters must not absorb the estimate: they are exact
+	// totals, and the live part is reported separately.
+	if merged[0].Counters.Gen != 9000 {
+		t.Fatalf("committed generated = %d, want 9000 untouched", merged[0].Counters.Gen)
+	}
+	if merged[0].Live != 500 {
+		t.Fatalf("live = %d, want 500", merged[0].Live)
+	}
+}
+
+// The in-flight column and the headline live figure measure the same thing, so
+// the column must add up to the headline. A lifetime average cannot do that.
+func TestInflightLiveColumnSumsToHeadline(t *testing.T) {
+	m := newMeterState(8)
+	now := base
+	cfg := defaultMeterConfig()
+	// Two streams, one older than the other, so a lifetime average would give
+	// them different weights than their current pace.
+	for _, id := range []string{"old", "new"} {
+		m.beginStream(id, "", "claude", "auth-1", "client-1", "model-1", now.Add(-20*time.Second))
+	}
+	m.observeEstimate("old", counters{Gen: 100}, now.Add(-2*time.Second))
+	m.observeEstimate("old", counters{Gen: 200}, now.Add(-1*time.Second))
+	m.observeEstimate("new", counters{Gen: 300}, now.Add(-1*time.Second))
+
+	view := m.snapshot(now, cfg, cfg.window())
+	var sum float64
+	for _, row := range view.Inflight {
+		sum += row.LivePerSecond
+	}
+	if math.Abs(sum-view.Rate.Live) > 0.001 {
+		t.Fatalf("in-flight column sums to %v, headline live is %v", sum, view.Rate.Live)
+	}
+	if sum == 0 {
+		t.Fatal("expected a non-zero live rate for open streams")
+	}
+}
+
+// A stream whose metadata carries no credential must still land in the provider
+// breakdown once a completed record has taught the plugin which provider serves
+// that model. Otherwise its live tokens vanish from the provider rows.
+func TestProviderAttributionFallsBackToModel(t *testing.T) {
+	m := newMeterState(8)
+	cfg := defaultMeterConfig()
+	m.recordFinal(makeRecord("done", time.Second, usageDetail{OutputTokens: 10}), base)
+	// makeRecord is claude serving claude-sonnet-5-5; learn that pairing, then
+	// open a stream with no auth key at all.
+	m.beginStream("live", "", "", "", "client-1", "claude-sonnet-5-5", base)
+	if got := m.providerLabelLocked(m.inflight["live"]); got != "claude" {
+		t.Fatalf("providerLabel = %q, want claude learned from the model", got)
+	}
+	view := m.snapshot(base.Add(2*time.Second), cfg, cfg.window())
+	var found bool
+	for _, row := range view.Dimensions["provider"] {
+		if row.Name == "claude" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("provider breakdown lost the stream with no credential")
+	}
+}
+
+// An unresolved credential must not be printed as the provider. It is an id,
+// not a provider name, and the column is not the place to disclose it.
+func TestProviderLabelNeverFallsBackToAuthKey(t *testing.T) {
+	m := newMeterState(8)
+	m.beginStream("req-1", "", "", "auth-secret-1", "", "", base)
+	if got := m.providerLabelLocked(m.inflight["req-1"]); got != "" {
+		t.Fatalf("providerLabel = %q, want empty rather than the auth key", got)
 	}
 }

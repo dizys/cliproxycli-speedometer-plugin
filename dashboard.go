@@ -138,6 +138,7 @@ const dashboardHTML = `<!doctype html>
   .conn { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .status { font-size: 12px; color: var(--text-muted); }
+  .inflight-note { margin: -4px 0 10px; line-height: 1.45; }
   .status.err { color: var(--critical); }
   .hidden { display: none !important; }
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -238,11 +239,14 @@ const dashboardHTML = `<!doctype html>
       <h2>Streams in flight</h2>
       <span class="status" id="inflight-count"></span>
     </div>
+    <p class="status inflight-note">Tok/s now is each stream's pace over the last
+       few seconds, the same measurement the live estimate sums, so the column
+       adds up to it. Tokens is the stream's running total.</p>
     <table>
       <thead>
         <tr>
           <th>Provider</th><th>Model</th><th>Client</th>
-          <th class="num">Elapsed</th><th class="num">Tokens</th><th class="num">Tok/s</th>
+          <th class="num">Elapsed</th><th class="num">Tokens</th><th class="num">Tok/s now</th>
         </tr>
       </thead>
       <tbody id="inflight-body"></tbody>
@@ -499,10 +503,13 @@ const dashboardHTML = `<!doctype html>
         return;
       }
       card.classList.remove("hidden");
+      // Bars are sized from the rate the row prints, not from the committed
+      // counter, so a row carrying a live estimate is as long as its number
+      // claims. Ranking already comes from the server in rate order.
       var max = 0;
-      rows.forEach(function (r) { max = Math.max(max, (r.counters || {}).generated || 0); });
+      rows.forEach(function (r) { max = Math.max(max, r.rate || 0); });
       rows.slice(0, 8).forEach(function (r) {
-        var tokens = (r.counters || {}).generated || 0;
+        var rate = r.rate || 0;
         var label = r.label || r.name || "unknown";
         var row = document.createElement("div");
         row.className = "bar-row";
@@ -515,14 +522,14 @@ const dashboardHTML = `<!doctype html>
         name.title = label;
         var val = document.createElement("span");
         val.className = "bar-val";
-        val.textContent = fmt(r.rate || 0) + " tok/s";
+        val.textContent = fmt(rate) + " tok/s";
         top.appendChild(name); top.appendChild(val);
 
         var track = document.createElement("div");
         track.className = "bar-track";
         var fill = document.createElement("div");
         fill.className = "bar-fill";
-        fill.style.width = (max > 0 ? Math.max(2, (tokens / max) * 100) : 0) + "%";
+        fill.style.width = (max > 0 ? Math.max(2, (rate / max) * 100) : 0) + "%";
         track.appendChild(fill);
 
         row.appendChild(top); row.appendChild(track);
@@ -544,7 +551,7 @@ const dashboardHTML = `<!doctype html>
         r.client_label || shortHash(r.client),
         fmtDur(r.elapsed_seconds || 0),
         fmt((r.counters || {}).tokens || 0),
-        fmt(r.tokens_per_second || 0)
+        fmt(r.live_per_second || 0)
       ];
       cells.forEach(function (text, i) {
         var td = document.createElement("td");

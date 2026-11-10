@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -319,7 +320,13 @@ type dimensionTotal struct {
 	Name     string   `json:"name"`
 	Label    string   `json:"label,omitempty"`
 	Counters counters `json:"counters"`
-	Rate     float64  `json:"rate"`
+	// Live is the generated count still estimated from open streams, measured
+	// over the live window rather than the display window. It is reported
+	// separately so a client can tell committed work from a running estimate,
+	// and so Rate can weight the two by their own horizons instead of dividing
+	// a five-second quantity by a thirty-second window.
+	Live int64   `json:"live,omitempty"`
+	Rate float64 `json:"rate"`
 }
 
 // estStamp is one second of estimated tokens for a stream.
@@ -368,15 +375,23 @@ func (fi *inflight) liveTokens(now time.Time, window time.Duration) int64 {
 
 // inflightView is the per-stream row shown on the dashboard.
 type inflightView struct {
-	RequestID       string   `json:"request_id"`
-	Provider        string   `json:"provider,omitempty"`
-	Client          string   `json:"client,omitempty"`
-	ClientLabel     string   `json:"client_label,omitempty"`
-	Model           string   `json:"model,omitempty"`
-	StartedAt       string   `json:"started_at"`
-	ElapsedSeconds  float64  `json:"elapsed_seconds"`
-	Counters        counters `json:"counters"`
-	TokensPerSecond float64  `json:"tokens_per_second"`
+	RequestID      string   `json:"request_id"`
+	Provider       string   `json:"provider,omitempty"`
+	Client         string   `json:"client,omitempty"`
+	ClientLabel    string   `json:"client_label,omitempty"`
+	Model          string   `json:"model,omitempty"`
+	StartedAt      string   `json:"started_at"`
+	ElapsedSeconds float64  `json:"elapsed_seconds"`
+	Counters       counters `json:"counters"`
+	// TokensPerSecond is the stream's lifetime average: everything it has
+	// generated divided by its elapsed time. It is not comparable with a
+	// windowed rate, so the table shows LivePerSecond beside it.
+	TokensPerSecond float64 `json:"tokens_per_second"`
+	// LivePerSecond is the stream's pace over the live window, the same
+	// measurement the headline live estimate sums. The column of these across
+	// open streams adds up to rate.live, which is what lets a reader reconcile
+	// the two cards. Zero means the stream has produced nothing recently.
+	LivePerSecond float64 `json:"live_per_second"`
 }
 
 // meterState is the single shared store the hooks write and snapshots read.
@@ -399,6 +414,11 @@ type meterState struct {
 
 	// authKey -> provider, learned from host.auth.list.
 	authProvider map[string]string
+	// model -> provider, learned from completed usage records. A stream whose
+	// metadata carries no credential can still be attributed by the model it is
+	// serving, which keeps its live estimate in the provider breakdown instead
+	// of dropping it there while the stream runs.
+	modelProvider map[string]string
 	// caller-scope hash -> masked client label, learned from usage records.
 	// Only populated while labels are enabled; see setClientLabels.
 	clientLabel map[string]string
@@ -411,16 +431,17 @@ type meterState struct {
 
 func newMeterState(maxDimensions int) *meterState {
 	return &meterState{
-		provider:     newSeriesSet(maxDimensions),
-		client:       newSeriesSet(maxDimensions),
-		model:        newSeriesSet(maxDimensions),
-		auth:         newSeriesSet(maxDimensions),
-		inflight:     make(map[string]*inflight),
-		traceIndex:   make(map[string]string),
-		authProvider: make(map[string]string),
-		clientLabel:  make(map[string]string),
-		labels:       true,
-		startedAt:    time.Now(),
+		provider:      newSeriesSet(maxDimensions),
+		client:        newSeriesSet(maxDimensions),
+		model:         newSeriesSet(maxDimensions),
+		auth:          newSeriesSet(maxDimensions),
+		inflight:      make(map[string]*inflight),
+		traceIndex:    make(map[string]string),
+		authProvider:  make(map[string]string),
+		modelProvider: make(map[string]string),
+		clientLabel:   make(map[string]string),
+		labels:        true,
+		startedAt:     time.Now(),
 	}
 }
 
@@ -507,18 +528,26 @@ func (m *meterState) recordFinal(rec usageRecord, now time.Time) {
 
 	clientKey := m.clientKeyFor(rec.APIKey)
 
+	provider := normalizeProviderKey(rec.Provider)
+
 	m.mu.Lock()
 	m.total.spread(from, to, c)
 	m.lifetime.add(c)
-	if key := rec.AuthID; key != "" && rec.Provider != "" {
-		m.authProvider[key] = rec.Provider
+	if key := rec.AuthID; key != "" && provider != "" {
+		m.authProvider[key] = provider
 	}
-	if rec.AuthIndex != "" && rec.Provider != "" {
-		m.authProvider[rec.AuthIndex] = rec.Provider
+	if rec.AuthIndex != "" && provider != "" {
+		m.authProvider[rec.AuthIndex] = provider
+	}
+	// A completed record is the only place a model and its provider appear
+	// together, so learn the pairing here and use it to attribute streams whose
+	// metadata carries no credential.
+	if model := strings.TrimSpace(rec.Model); model != "" && provider != "" {
+		m.modelProvider[model] = provider
 	}
 	m.mu.Unlock()
 
-	m.provider.add(rec.Provider, from, to, c)
+	m.provider.add(provider, from, to, c)
 	m.client.add(clientKey, from, to, c)
 	m.model.add(rec.Model, from, to, c)
 	m.auth.add(rec.AuthID, from, to, c)
@@ -852,6 +881,14 @@ func (m *meterState) snapshot(now time.Time, cfg meterConfig, window time.Durati
 		if rateBasis < 1 {
 			rateBasis = 1
 		}
+		// LivePerSecond uses the same numerator the headline sums, over the live
+		// window, so the open-stream column adds up to rate.live. A stream that
+		// has stalled past the live window shows zero here even though its
+		// lifetime average stays non-zero.
+		var livePerSecond float64
+		if liveSeconds := liveWindow.Seconds(); liveSeconds > 0 {
+			livePerSecond = float64(live) / liveSeconds
+		}
 		rows = append(rows, inflightView{
 			RequestID:       fi.requestID,
 			Provider:        m.providerLabelLocked(fi),
@@ -862,6 +899,7 @@ func (m *meterState) snapshot(now time.Time, cfg meterConfig, window time.Durati
 			ElapsedSeconds:  elapsed,
 			Counters:        fi.total,
 			TokensPerSecond: float64(fi.total.Gen) / rateBasis,
+			LivePerSecond:   livePerSecond,
 		})
 	}
 	streams := len(rows)
@@ -872,6 +910,12 @@ func (m *meterState) snapshot(now time.Time, cfg meterConfig, window time.Durati
 	m.mu.Unlock()
 
 	sort.Slice(rows, func(i, j int) bool {
+		// Rank on the pace the table prints, so the busiest stream is first and
+		// a stalled one falls to the bottom rather than outranking a fast stream
+		// on a long lifetime average.
+		if rows[i].LivePerSecond != rows[j].LivePerSecond {
+			return rows[i].LivePerSecond > rows[j].LivePerSecond
+		}
 		if rows[i].TokensPerSecond != rows[j].TokensPerSecond {
 			return rows[i].TokensPerSecond > rows[j].TokensPerSecond
 		}
@@ -885,9 +929,11 @@ func (m *meterState) snapshot(now time.Time, cfg meterConfig, window time.Durati
 		"auth":     withRates(m.auth.windowTotals(now, window), window),
 	}
 	// Fold live estimates into the same dimension rows so a running stream is
-	// visible per provider/client before its record lands.
+	// visible per provider/client before its record lands. The live count is
+	// summed over the live window, so mergeLive weights each part by its own
+	// horizon rather than dividing a short measurement by the long window.
 	for dim, values := range liveByDim {
-		dims[dim] = mergeLive(dims[dim], values, window)
+		dims[dim] = mergeLive(dims[dim], values, window, liveWindow)
 	}
 	for i := range dims["client"] {
 		if label, ok := clientLabels[dims["client"][i].Name]; ok {
@@ -935,14 +981,25 @@ func withRates(items []dimensionTotal, window time.Duration) []dimensionTotal {
 	secs := window.Seconds()
 	out := make([]dimensionTotal, 0, len(items))
 	for _, item := range items {
-		item.Rate = float64(item.Counters.Gen) / secs
+		if secs <= 0 {
+			item.Rate = 0
+		} else {
+			item.Rate = float64(item.Counters.Gen) / secs
+		}
 		out = append(out, item)
 	}
 	return out
 }
 
-func mergeLive(items []dimensionTotal, live map[string]int64, window time.Duration) []dimensionTotal {
+// mergeLive folds open-stream estimates into the dimension rows. The live count
+// arrives summed over the live window, so it is scaled by that horizon and the
+// committed part by the display window; adding the raw count into the committed
+// counter and dividing once by the display window would report a stream at a
+// fraction of its actual pace (a five-second estimate over a thirty-second
+// window reads as one sixth of the truth).
+func mergeLive(items []dimensionTotal, live map[string]int64, window, liveWindow time.Duration) []dimensionTotal {
 	secs := window.Seconds()
+	liveSecs := liveWindow.Seconds()
 	byName := make(map[string]int, len(items))
 	for i := range items {
 		byName[items[i].Name] = i
@@ -952,24 +1009,28 @@ func mergeLive(items []dimensionTotal, live map[string]int64, window time.Durati
 			continue
 		}
 		if idx, ok := byName[name]; ok {
-			items[idx].Counters.Gen += tokens
-			// Live estimates are generation only, so the billed total moves by
-			// the same amount until the exact record replaces it.
-			items[idx].Counters.Tokens += tokens
-			items[idx].Rate = float64(items[idx].Counters.Gen) / secs
+			items[idx].Live += tokens
 			continue
 		}
-		items = append(items, dimensionTotal{
-			Name:     name,
-			Rate:     float64(tokens) / secs,
-			Counters: counters{Gen: tokens, Tokens: tokens},
-		})
+		items = append(items, dimensionTotal{Name: name, Live: tokens})
+	}
+	for i := range items {
+		item := &items[i]
+		var rate float64
+		if secs > 0 {
+			rate += float64(item.Counters.Gen) / secs
+		}
+		if liveSecs > 0 {
+			rate += float64(item.Live) / liveSecs
+		}
+		item.Rate = rate
 	}
 	sort.Slice(items, func(i, j int) bool {
-		// Same order as the dashboard prints: generation, which is the rate
-		// every row shows, with a stable name tiebreak.
-		if items[i].Counters.Gen != items[j].Counters.Gen {
-			return items[i].Counters.Gen > items[j].Counters.Gen
+		// Rank on the rate the row actually prints, so the column reads in
+		// descending order whatever mix of committed work and open streams it
+		// holds. Name keeps the order stable across equal rates.
+		if items[i].Rate != items[j].Rate {
+			return items[i].Rate > items[j].Rate
 		}
 		return items[i].Name < items[j].Name
 	})
@@ -1030,17 +1091,24 @@ func (m *meterState) setAuthProvider(key, provider string) {
 	m.mu.Unlock()
 }
 
-// providerLabelLocked resolves the display provider for a stream, preferring
-// the learned auth directory over the provider guessed at request time. An
-// unresolved auth key falls through as itself: it is still a stable grouping
-// label, and hiding it would drop the stream from the provider breakdown until
-// its usage record lands.
+// providerLabelLocked resolves the display provider for a stream. The learned
+// auth directory wins, since it names the credential actually serving the
+// request; failing that, a model seen in a completed record names the provider
+// that produced it. Only then does the request-time guess apply, and finally
+// the bare auth key, which is a stable grouping label but leaks an id-shaped
+// string into a column meant for provider names.
 func (m *meterState) providerLabelLocked(fi *inflight) string {
-	if p, ok := m.authProvider[fi.authKey]; ok {
+	if p, ok := m.authProvider[fi.authKey]; ok && p != "" {
+		return p
+	}
+	if p, ok := m.modelProvider[fi.model]; ok && p != "" {
 		return p
 	}
 	if fi.provider != "" {
 		return fi.provider
 	}
-	return fi.authKey
+	// The auth key is a fallback grouping label only when it is not an
+	// id-shaped credential: showing one would put a credential identifier in
+	// the provider column.
+	return ""
 }

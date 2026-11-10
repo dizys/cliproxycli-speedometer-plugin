@@ -90,12 +90,15 @@ window resets; every other key takes effect without losing data.
                   "generated": 0, "tokens": 0, "requests": 0 },
     "lifetime": { "...": "same shape" },
     "dimensions": {
-      "provider": [{ "name": "claude", "label": "", "counters": {}, "rate": 0 }],
+      "provider": [{ "name": "claude", "label": "", "counters": {},
+                     "live": 0, "rate": 0 }],
       "client":   [],
       "model":    [],
       "auth":     []
     },
-    "inflight": [],
+    "inflight": [{ "request_id": "...", "provider": "claude",
+                   "model": "...", "elapsed_seconds": 4.2, "counters": {},
+                   "tokens_per_second": 0, "live_per_second": 0 }],
     "streams": 0,
     "series": [{ "ts": 1794201540, "committed": 120, "live": 40 }]
   }
@@ -117,6 +120,34 @@ model was emitting a few dozen tokens per second.
 `counters.tokens` remains the full total (prompt plus completion, counted the
 way the provider bills them), so window and lifetime totals are complete. Only
 the rates narrow to generation.
+
+### Reading the three rate surfaces
+
+Three numbers on the dashboard measure throughput over different horizons, and
+they are not meant to be added together or compared directly:
+
+| Surface | What it measures |
+|---|---|
+| Headline **live estimate** | generated tokens over the last `live_window_seconds`, divided by that horizon |
+| Per-dimension `rate` | committed tokens over `window_seconds`, plus live tokens over the live window |
+| In-flight **Tok/s now** | one stream's pace over the live window |
+
+The in-flight column is `live_per_second`, and the open streams add up to
+`rate.live`: that is the reconciliation between the two cards. The stream's
+lifetime average is reported separately as `tokens_per_second` in the same JSON,
+but the table does not show it, because a stream that ran long and is now
+stalled would outrank a fast one and could never sum to a live figure.
+
+A dimension row therefore reports `counters.generated` for its committed,
+exact work and `live` for the part still estimated from open streams. Its `rate`
+is committed over the window plus live over the live window, and bars are
+scaled from that rate so a bar can never be shorter than the number beside it.
+
+A live stream is attributed to a provider by its credential when the host
+reports one, and otherwise by the provider last seen serving that model in a
+completed record. A stream whose provider cannot be resolved at all is left out
+of the provider breakdown rather than filed under a credential id; its tokens
+still appear in the model, client, and total figures.
 
 Both sets of totals live in memory and reset when the host restarts, or when
 `window_seconds` or `series_seconds` change. This is an instrument, not an
@@ -191,7 +222,7 @@ from the filename, and the host disables any plugin that has no config entry.
 Requires Go 1.24+ and a C compiler (cgo).
 
 ```sh
-./build.sh                     # -> cliproxy-speedometer-v0.1.4.so (linux/amd64)
+./build.sh                     # -> cliproxy-speedometer-v0.1.5.so (linux/amd64)
 ARCH=arm64 ./build.sh          # native arm64 build
 ```
 
