@@ -148,6 +148,21 @@ func TestSeriesSetFoldsOverflowIntoOther(t *testing.T) {
 	}
 }
 
+func TestSeriesSetOrdersByGeneratedNotBilled(t *testing.T) {
+	set := newSeriesSet(8)
+	// "prompt-heavy" bills more tokens but generates fewer, so a rank by billed
+	// tokens would place it above "fast" even though the row shows tok/s.
+	set.add("prompt-heavy", base, base, counters{
+		Input: 90000, Output: 1000, Gen: 1000, Tokens: 91000})
+	set.add("fast", base, base, counters{
+		Input: 100, Output: 9000, Gen: 9000, Tokens: 9100})
+
+	totals := set.windowTotals(base, time.Second)
+	if len(totals) != 2 || totals[0].Name != "fast" {
+		t.Fatalf("totals = %#v, want fast first (more generated tokens)", totals)
+	}
+}
+
 func TestSeriesSetUnknownName(t *testing.T) {
 	set := newSeriesSet(8)
 	set.add("", base, base, counters{Tokens: 4})
@@ -627,5 +642,25 @@ func TestSnapshotIsJSONSerializable(t *testing.T) {
 		if _, ok := decoded[key]; !ok {
 			t.Fatalf("snapshot JSON missing %q", key)
 		}
+	}
+}
+
+func TestMergeLiveOrdersByGeneratedRate(t *testing.T) {
+	items := []dimensionTotal{
+		{Name: "prompt-heavy", Counters: counters{Input: 90000, Output: 1000, Gen: 1000, Tokens: 91000}},
+		{Name: "fast", Counters: counters{Input: 100, Output: 4000, Gen: 4000, Tokens: 4100}},
+	}
+	merged := mergeLive(items, map[string]int64{"flowing": 9000}, 10*time.Second)
+
+	if len(merged) != 3 {
+		t.Fatalf("merged = %#v, want three rows", merged)
+	}
+	// The live-only row ranks on its own generated count, which is what the
+	// dashboard prints for it.
+	if merged[0].Name != "flowing" {
+		t.Fatalf("first row = %q, want the highest generation rate", merged[0].Name)
+	}
+	if merged[1].Name != "fast" {
+		t.Fatalf("second row = %q, want fast ahead of prompt-heavy", merged[1].Name)
 	}
 }

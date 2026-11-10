@@ -452,9 +452,9 @@ const dashboardHTML = `<!doctype html>
       }
       card.classList.remove("hidden");
       var max = 0;
-      rows.forEach(function (r) { max = Math.max(max, (r.counters || {}).tokens || 0); });
+      rows.forEach(function (r) { max = Math.max(max, (r.counters || {}).generated || 0); });
       rows.slice(0, 8).forEach(function (r) {
-        var tokens = (r.counters || {}).tokens || 0;
+        var tokens = (r.counters || {}).generated || 0;
         var label = r.label || r.name || "unknown";
         var row = document.createElement("div");
         row.className = "bar-row";
@@ -524,7 +524,16 @@ const dashboardHTML = `<!doctype html>
     ];
     var dims = d.dimensions || {};
     Object.keys(dims).forEach(function (dim) {
-      (dims[dim] || []).forEach(function (r) {
+      // The bars rank by generated tokens, which is the rate they print. This
+      // table prints billed tokens instead, so it sorts by that column rather
+      // than inheriting an order that would read out of sequence here.
+      var rows_ = (dims[dim] || []).slice().sort(function (a, b) {
+        var at = (a.counters || {}).tokens || 0;
+        var bt = (b.counters || {}).tokens || 0;
+        if (at !== bt) return bt - at;
+        return (a.label || a.name || "") < (b.label || b.name || "") ? -1 : 1;
+      });
+      rows_.forEach(function (r) {
         rows.push([dim + ": " + (r.label || r.name || "unknown"), r.counters]);
       });
     });

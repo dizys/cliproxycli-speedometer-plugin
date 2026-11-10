@@ -288,8 +288,12 @@ func (s *seriesSet) windowTotals(now time.Time, window time.Duration) []dimensio
 		out = append(out, dimensionTotal{Name: name, Counters: c})
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Counters.Tokens != out[j].Counters.Tokens {
-			return out[i].Counters.Tokens > out[j].Counters.Tokens
+		// Every rate is a generation rate, so the ordering has to follow the
+		// same counter the dashboard prints and the bar widths derive from. A
+		// rank by billed tokens would put a large-prompt, low-generation row
+		// above a fast one and make the column read out of order.
+		if out[i].Counters.Gen != out[j].Counters.Gen {
+			return out[i].Counters.Gen > out[j].Counters.Gen
 		}
 		return out[i].Name < out[j].Name
 	})
@@ -962,7 +966,12 @@ func mergeLive(items []dimensionTotal, live map[string]int64, window time.Durati
 		})
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].Counters.Tokens > items[j].Counters.Tokens
+		// Same order as the dashboard prints: generation, which is the rate
+		// every row shows, with a stable name tiebreak.
+		if items[i].Counters.Gen != items[j].Counters.Gen {
+			return items[i].Counters.Gen > items[j].Counters.Gen
+		}
+		return items[i].Name < items[j].Name
 	})
 	return items
 }

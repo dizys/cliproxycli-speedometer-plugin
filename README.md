@@ -182,7 +182,7 @@ from the filename, and the host disables any plugin that has no config entry.
 Requires Go 1.24+ and a C compiler (cgo).
 
 ```sh
-./build.sh                     # -> cliproxy-speedometer-v0.1.2.so (linux/amd64)
+./build.sh                     # -> cliproxy-speedometer-v0.1.3.so (linux/amd64)
 ARCH=arm64 ./build.sh          # native arm64 build
 ```
 
