@@ -952,3 +952,42 @@ func TestInflightRateIsClampedForNewStreams(t *testing.T) {
 			view.Inflight[0].TokensPerSecond)
 	}
 }
+
+// The dashboard must not reach the management API on its own when the panel was
+// not asked to remember the key. The page is served on an unauthenticated
+// resource route, so an automatic request there would be one a link could
+// trigger by itself. The click-gate removal is only safe because the page keys
+// reuse off the panel's "remember password" flag, which the panel writes into
+// storage alongside the key.
+func TestDashboardRequiresRememberedPanelKey(t *testing.T) {
+	resetPlugin(t)
+	if _, err := handleMethod(methodManagementRegister, []byte(`{"BasePath":"/v0/management","ResourceBasePath":"/v0/resource/plugins/x"}`)); err != nil {
+		t.Fatalf("management.register: %v", err)
+	}
+	raw, err := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/v0/resource/plugins/x/dashboard"}`))
+	if err != nil {
+		t.Fatalf("management.handle: %v", err)
+	}
+	env := decodeEnvelope(t, raw)
+	var resp managementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	body := string(resp.Body)
+
+	for _, want := range []string{"panelRemembered", "rememberPassword", "FORGET_STORE"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard does not gate key reuse on %q", want)
+		}
+	}
+	// The old click-only affordance must be gone, or the page would ask the
+	// operator to click through on every load again.
+	if strings.Contains(body, `id="inherit"`) {
+		t.Fatal("dashboard still carries the click-to-use button")
+	}
+	// Reuse must be conditional on the remembered flag, not merely on a key
+	// being present.
+	if !strings.Contains(body, "savedKey && panelRemembered()") {
+		t.Fatal("dashboard does not require the remembered flag before reusing the key")
+	}
+}

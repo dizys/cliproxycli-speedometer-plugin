@@ -130,23 +130,32 @@ behind the management key. Being embedded in the control panel does not supply
 that key: the host authenticates with a bearer key, not a session cookie, so the
 iframe inherits no credential.
 
-The dashboard offers the key the control panel already saved in this origin's
-`localStorage` (`cli-proxy-auth`, the panel's own storage format), but only
-after you click **Use the control panel's saved key**. It never spends a stored
-credential on page load: the resource route is unauthenticated, so a link to
-this page must not be able to trigger an authenticated request by itself. A
-saved key is offered only when its recorded API base is this origin, so a key
-for another proxy is never spent against this host's failure ban.
+When you log in to the control panel with **remember password** ticked, the panel
+keeps the management key in this origin's `localStorage` (`cli-proxy-auth`, the
+panel's own storage format). The dashboard reuses that key on load, so the
+instrument opens straight onto the numbers, which is how the other dashboard
+plugins in the registry behave. Ticking the box was a standing choice to let this
+browser hold the key, not a decision taken by whoever opened the URL.
+
+Reuse is deliberately conditional on that choice:
+
+- The key is read only when the panel's own `rememberPassword` flag is set. A key
+  present without the flag is not used; the page shows the form instead.
+- A key recorded for a different API origin is never used, so a leftover key for
+  another proxy cannot be spent against this host's failure ban.
+- Without a remembered key the page sends nothing at all. The resource route is
+  unauthenticated, so an automatic authenticated request there is only acceptable
+  when the operator already asked for the key to be kept.
 
 The key is held in page memory for the lifetime of the tab and is not written
-back to storage. The key-entry form is shown when the panel was told not to
-remember the key, or when the panel is served from a different origin than the
-API.
+back to storage. **Use a different key** drops the borrowed key, shows the form,
+and stops this browser reusing the panel's key on later loads.
 
 The page sends `Authorization: Bearer <management key>` and stops polling on a
 401/403/429 instead of retrying, so a rejected key can never contribute to the
-host's per-IP management ban. "Forget key" stops the page offering the panel's
-key again and clears the form.
+host's per-IP management ban. A rejected remembered key is also marked so the
+page does not try it again on the next load; a hand-typed key is never persisted
+in the first place.
 
 ## Privacy
 
@@ -182,7 +191,7 @@ from the filename, and the host disables any plugin that has no config entry.
 Requires Go 1.24+ and a C compiler (cgo).
 
 ```sh
-./build.sh                     # -> cliproxy-speedometer-v0.1.3.so (linux/amd64)
+./build.sh                     # -> cliproxy-speedometer-v0.1.4.so (linux/amd64)
 ARCH=arm64 ./build.sh          # native arm64 build
 ```
 

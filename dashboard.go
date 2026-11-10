@@ -131,6 +131,11 @@ const dashboardHTML = `<!doctype html>
     background: var(--series-1); color: #fff; border: 1px solid transparent;
   }
   button.ghost { background: transparent; color: var(--text-secondary); border-color: var(--border); }
+  button.link {
+    background: none; border: none; padding: 0; font-size: 12px;
+    color: var(--text-secondary); text-decoration: underline; text-underline-offset: 2px;
+  }
+  .conn { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .status { font-size: 12px; color: var(--text-muted); }
   .status.err { color: var(--critical); }
@@ -150,14 +155,10 @@ const dashboardHTML = `<!doctype html>
     <p id="gate-explain">The control panel did not leave a management key in this
        browser, so the speedometer needs one to read the management API. It is used only
        for the snapshot request to this server.</p>
-    <div class="row hidden" id="inherit-row">
-      <button id="inherit">Use the control panel's saved key</button>
-    </div>
     <label for="key">Management key</label>
     <input id="key" type="password" autocomplete="current-password" placeholder="management key">
     <div class="row">
       <button id="connect">Connect</button>
-      <button class="ghost" id="forget">Forget key</button>
       <span class="status" id="gate-status"></span>
     </div>
     <p class="status">Five wrong keys ban this IP for 30 minutes, so the page
@@ -191,6 +192,10 @@ const dashboardHTML = `<!doctype html>
           <div class="stat-value" id="window-reqs">0</div>
           <div class="stat-label" id="reqs-label">requests in window</div>
         </div>
+      </div>
+      <div class="conn" id="conn">
+        <span id="conn-what">Reading the snapshot</span>
+        <button class="link" id="switch-key">Use a different key</button>
       </div>
     </div>
   </section>
@@ -356,6 +361,23 @@ const dashboardHTML = `<!doctype html>
     return null;
   }
 
+  // panelRemembered reports whether the operator asked the control panel to keep
+  // the key. The panel's persist layer writes managementKey only when the login
+  // form's "remember password" box is ticked, but the flag is the thing that
+  // records the choice, so require it explicitly rather than inferring consent
+  // from the key's presence.
+  function panelRemembered() {
+    var raw = null;
+    try { raw = localStorage.getItem(PANEL_STORE); } catch (e) { return false; }
+    if (!raw) return false;
+    var text = panelDecode(raw);
+    if (!text) return false;
+    var parsed = null;
+    try { parsed = JSON.parse(text); } catch (e) { return false; }
+    var s = parsed && parsed.state ? parsed.state : parsed;
+    return Boolean(s && s.rememberPassword === true);
+  }
+
   function show(id, on) { el(id).classList.toggle("hidden", !on); }
 
   function stopPolling(reason, isError) {
@@ -366,13 +388,20 @@ const dashboardHTML = `<!doctype html>
     s.className = "status" + (isError ? " err" : "");
   }
 
-  function connect(key) {
+  // connect starts the poll loop. remember says the key came from the panel's
+  // own remembered session; it stays in memory either way, because writing a
+  // management credential into this origin's storage is exposure the feature
+  // does not need.
+  function connect(key, remember) {
     state.key = key;
     state.stopped = false;
+    state.remembered = Boolean(remember);
     el("gate-status").textContent = "";
+    el("meta").textContent = "connecting";
     show("gate", false);
     show("live", true); show("chart-card", true);
     show("dims", true); show("inflight-card", true); show("table-card", true);
+    show("conn", Boolean(remember));
     poll();
   }
   function poll() {
@@ -394,6 +423,11 @@ const dashboardHTML = `<!doctype html>
         });
       }
       if (!resp.ok) throw new Error("HTTP " + resp.status);
+      // A key that worked is safe to reuse; clear any earlier block so a fixed
+      // key does not leave this browser stuck on the form.
+      if (state.remembered) {
+        try { localStorage.removeItem(FORGET_STORE); } catch (e) {}
+      }
       return resp.json().then(render).then(schedule);
     }).catch(function (err) {
       // A transport failure is transient; keep trying but say so.
@@ -403,8 +437,19 @@ const dashboardHTML = `<!doctype html>
   }
 
   function lockOut(message) {
-    stopPolling(message + ". Reload the page to try again.", true);
+    stopPolling(message, true);
+    el("meta").textContent = "not connected";
     show("gate", true);
+    // A key that just failed must not be offered again on reload, or every
+    // visit would spend another attempt against the host's failure ban. A key
+    // the operator typed is not affected: it is never persisted in the first
+    // place.
+    if (state.remembered) {
+      try { localStorage.setItem(FORGET_STORE, "1"); } catch (e) {}
+    }
+    el("gate-explain").textContent =
+      "The key was rejected. Enter a management key to read the management API.";
+    show("conn", false);
     ["live", "chart-card", "dims", "inflight-card", "table-card"].forEach(function (id) { show(id, false); });
   }
 
@@ -431,6 +476,9 @@ const dashboardHTML = `<!doctype html>
       " · uptime " + fmtDur(d.uptime_seconds || 0) +
       " · window " + fmtDur(d.window_seconds || 0);
     el("updated").textContent = "updated " + new Date().toLocaleTimeString();
+    el("conn-what").textContent = state.remembered
+      ? "Using the key the control panel saved in this browser"
+      : "Connected with a key entered for this tab";
 
     state.series = d.series || [];
     state.dims = d.dimensions || {};
@@ -767,31 +815,31 @@ const dashboardHTML = `<!doctype html>
   el("connect").addEventListener("click", function () {
     var key = el("key").value.trim();
     if (!key) { el("gate-status").textContent = "Enter the management key."; return; }
-    try { localStorage.removeItem(FORGET_STORE); } catch (e) {}
-    connect(key);
+    // A hand-entered key is used for this tab only; the page does not persist it.
+    connect(key, false);
   });
 
   el("key").addEventListener("keydown", function (ev) {
     if (ev.key === "Enter") el("connect").click();
   });
 
-  // The key is never written back to storage. It lives in this page's memory
-  // for as long as the page is open, so closing the tab ends it. Persisting it
-  // would put a management credential in plaintext for any script on this
-  // origin, which is more exposure than the feature is worth.
-  el("inherit").addEventListener("click", function () {
-    var key = panelStoredKey();
-    if (!key) { el("gate-status").textContent = "The control panel has no saved key."; return; }
-    try { localStorage.removeItem(FORGET_STORE); } catch (e) {}
-    connect(key);
-  });
-
-  // Forget stops the page and also stops it borrowing the panel's key again on
-  // the next load; the panel's own saved session is left untouched.
-  el("forget").addEventListener("click", function () {
+  // Switching keys drops the borrowed one and shows the form, without touching
+  // the panel's own saved session. It also stops this browser reusing the
+  // panel's key on later loads, which is the opt-out for the remembered key.
+  el("switch-key").addEventListener("click", function () {
+    state.stopped = true;
+    if (state.timer) { clearTimeout(state.timer); state.timer = null; }
     try { localStorage.setItem(FORGET_STORE, "1"); } catch (e) {}
+    state.key = null;
+    el("gate-status").textContent = "";
     el("key").value = "";
-    lockOut("Key forgotten");
+    el("gate-explain").textContent =
+      "Enter a management key. It is used only for the snapshot request to this server " +
+      "and is not written back to storage.";
+    show("gate", true);
+    show("conn", false);
+    ["live", "chart-card", "dims", "inflight-card", "table-card"].forEach(function (id) { show(id, false); });
+    el("key").focus();
   });
 
   el("toggle-table").addEventListener("click", function () {
@@ -807,28 +855,28 @@ const dashboardHTML = `<!doctype html>
     resizeTimer = setTimeout(function () { drawChart(state.series); }, 120);
   });
 
-  // Nothing is sent until the operator acts. The resource route is
-  // unauthenticated, so a page that reached out with a stored credential on
-  // load would let any link to this URL spend the panel's key without a
-  // deliberate click. The panel's key is offered as a button, never used
-  // automatically.
+  // Reuse the panel's key on load only when the operator asked the panel to
+  // remember it. The panel's persist layer writes managementKey only when the
+  // login form's "remember password" box is ticked, so a key readable here is
+  // one the operator chose to have kept in this browser. That is a standing
+  // choice, not a fresh one made by whoever opened the URL, and the page sends
+  // nothing when no remembered key exists. A key belonging to another origin is
+  // rejected by panelStoredKey and is never used.
   var forgot = false;
   try { forgot = localStorage.getItem(FORGET_STORE) === "1"; } catch (e) {}
 
-  if (!forgot && panelStoredKey()) {
-    el("gate-explain").textContent =
-      "The control panel has saved a management key in this browser. Connect with it, " +
-      "or enter a different one below. The key is used only for the snapshot request " +
-      "to this server and is not written back to storage.";
-    el("inherit").textContent = "Use the control panel's saved key";
-    show("inherit-row", true);
+  var savedKey = forgot ? null : panelStoredKey();
+  if (savedKey && panelRemembered()) {
+    connect(savedKey, true);
   } else {
-    el("gate-explain").textContent =
-      "The control panel has not saved a management key in this browser, so the " +
-      "speedometer needs one to read the management API. It is used only for the " +
-      "snapshot request to this server and is not written back to storage.";
+    el("gate-explain").textContent = savedKey
+      ? "The control panel holds a key for this server but was not asked to remember it. " +
+        "Enter it below to read the management API."
+      : "The control panel has not saved a management key in this browser, so the " +
+        "speedometer needs one to read the management API. It is used only for the " +
+        "snapshot request to this server and is not written back to storage.";
+    show("gate", true);
   }
-  show("gate", true);
 })();
 </script>
 </body>
