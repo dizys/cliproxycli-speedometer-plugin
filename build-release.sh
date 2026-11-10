@@ -6,8 +6,8 @@
 #   cliproxy-speedometer_<version>_<goos>_<goarch>.zip
 #
 # for darwin/amd64, darwin/arm64, linux/amd64, linux/arm64 and windows/amd64,
-# plus one sha256sum-format checksums.txt. Each archive holds the versioned
-# library at its root: cliproxy-speedometer-v<version>.<ext>.
+# plus one sha256sum-format checksums.txt. Each archive holds the library at its
+# root under the name the store documents: cliproxy-speedometer.<ext>.
 #
 # Every required platform is mandatory. A missing toolchain is an error, never a
 # silent skip: a release that quietly drops a platform is exactly the failure
@@ -21,7 +21,7 @@
 #   ./build-release.sh --package          package the libraries already built
 #
 # Environment:
-#   VERSION   release version without the leading v (default: 0.1.1)
+#   VERSION   release version without the leading v (default: 0.1.2)
 #   OUT_DIR   output directory (default: dist)
 #   CC_<goos>_<goarch>   override the compiler for one platform, for example
 #                        CC_linux_arm64=aarch64-linux-gnu-gcc
@@ -30,7 +30,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PLUGIN_ID="cliproxy-speedometer"
-VERSION="${VERSION:-0.1.1}"
+VERSION="${VERSION:-0.1.2}"
 VERSION="${VERSION#v}"
 OUT_DIR="${OUT_DIR:-dist}"
 LIB_DIR="${OUT_DIR}/lib"
@@ -149,19 +149,37 @@ package_all() {
     for platform in "${PLATFORMS[@]}"; do
         goos="${platform%%/*}"
         goarch="${platform##*/}"
-        lib="${PLUGIN_ID}-v${VERSION}$(lib_ext "${goos}")"
+        built="${PLUGIN_ID}-v${VERSION}$(lib_ext "${goos}")"
+        # The store documents the archive entry as <id>.<ext>, and every
+        # published plugin uses that name. The installer also accepts the
+        # versioned form, but the plain name is the documented contract, so
+        # stage a copy under it rather than shipping the versioned filename.
+        entry="${PLUGIN_ID}$(lib_ext "${goos}")"
         zip_name="${PLUGIN_ID}_${VERSION}_${goos}_${goarch}.zip"
+        stage="${LIB_DIR}/${goos}_${goarch}/.package"
+        rm -rf "${stage}" && mkdir -p "${stage}"
+        cp "${LIB_DIR}/${goos}_${goarch}/${built}" "${stage}/${entry}"
         rm -f "${OUT_DIR}/${zip_name}"
-        # Build the archive from inside the platform directory so the library
+        # Build the archive from inside the staging directory so the library
         # lands at the zip root, which is what the host installer requires.
-        (cd "${LIB_DIR}/${goos}_${goarch}" && zip -q -X "../../${zip_name}" "${lib}")
-        echo "packaged ${OUT_DIR}/${zip_name}"
+        (cd "${stage}" && zip -q -X "../../../${zip_name}" "${entry}")
+        rm -rf "${stage}"
+        echo "packaged ${OUT_DIR}/${zip_name} (entry: ${entry})"
     done
 
+    # Checksums cover exactly the archives just packaged. A glob over *.zip
+    # would also pick up leftovers from an earlier version or an earlier plugin
+    # id, and those would then be published alongside the release.
+    local archives=()
+    for platform in "${PLATFORMS[@]}"; do
+        goos="${platform%%/*}"
+        goarch="${platform##*/}"
+        archives+=("${PLUGIN_ID}_${VERSION}_${goos}_${goarch}.zip")
+    done
     # The host looks checksums up by exact asset name, so no "./" prefix.
-    (cd "${OUT_DIR}" && sha256sum ./*.zip | sed 's|  \./|  |' >checksums.txt)
+    (cd "${OUT_DIR}" && sha256sum "${archives[@]}" >checksums.txt)
     echo "---"
-    (cd "${OUT_DIR}" && ls -l ./*.zip checksums.txt)
+    (cd "${OUT_DIR}" && ls -l "${archives[@]}" checksums.txt)
 }
 
 usage() {

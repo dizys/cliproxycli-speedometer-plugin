@@ -139,6 +139,12 @@ jobs:
             grep -q "  ${name}$" dist/checksums.txt || { echo "missing checksum for ${name}"; exit 1; }
             count="$(unzip -Z1 "dist/${name}" | wc -l)"
             test "${count}" -eq 1 || { echo "${name} holds ${count} entries, want 1"; exit 1; }
+            # The store documents the archive entry as <id>.<ext>.
+            ext="so"
+            case "${platform}" in darwin_*) ext="dylib" ;; windows_*) ext="dll" ;; esac
+            entry="$(unzip -Z1 "dist/${name}")"
+            test "${entry}" = "cliproxy-speedometer.${ext}" || {
+              echo "${name} holds ${entry}, want cliproxy-speedometer.${ext}"; exit 1; }
           done
           echo "asset matrix complete"
 

@@ -130,19 +130,23 @@ behind the management key. Being embedded in the control panel does not supply
 that key: the host authenticates with a bearer key, not a session cookie, so the
 iframe inherits no credential.
 
-The dashboard therefore reads the key the control panel already saved in this
-origin's `localStorage` (`cli-proxy-auth`, the panel's own storage format) and
-uses it for the snapshot request. When the panel points at this same origin, no
-key entry is needed at all. The key-entry form is only a fallback, shown when the
-panel was told not to remember the key, or when the panel is served from a
-different origin than the API. A saved key is reused only when its recorded API
-base is this origin, so a key for another proxy is never spent against this
-host's failure ban.
+The dashboard offers the key the control panel already saved in this origin's
+`localStorage` (`cli-proxy-auth`, the panel's own storage format), but only
+after you click **Use the control panel's saved key**. It never spends a stored
+credential on page load: the resource route is unauthenticated, so a link to
+this page must not be able to trigger an authenticated request by itself. A
+saved key is offered only when its recorded API base is this origin, so a key
+for another proxy is never spent against this host's failure ban.
+
+The key is held in page memory for the lifetime of the tab and is not written
+back to storage. The key-entry form is shown when the panel was told not to
+remember the key, or when the panel is served from a different origin than the
+API.
 
 The page sends `Authorization: Bearer <management key>` and stops polling on a
 401/403/429 instead of retrying, so a rejected key can never contribute to the
-host's per-IP management ban. "Forget key" drops both the borrowed and the
-entered key and stops the page borrowing the panel's key again.
+host's per-IP management ban. "Forget key" stops the page offering the panel's
+key again and clears the form.
 
 ## Privacy
 
@@ -178,7 +182,7 @@ from the filename, and the host disables any plugin that has no config entry.
 Requires Go 1.24+ and a C compiler (cgo).
 
 ```sh
-./build.sh                     # -> cliproxy-speedometer-v0.1.1.so (linux/amd64)
+./build.sh                     # -> cliproxy-speedometer-v0.1.2.so (linux/amd64)
 ARCH=arm64 ./build.sh          # native arm64 build
 ```
 

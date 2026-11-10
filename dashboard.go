@@ -5,12 +5,12 @@ package main
 // the resource route is unauthenticated and must not pull third-party code.
 //
 // The page renders its own JSON calls against /v0/management/speedometer/snapshot.
-// It reuses the management key the control panel already saved in this origin's
-// localStorage, so the normal case needs no key entry at all; the key form is
-// only a fallback for when the panel was told not to remember the key, or when
-// the panel is served from a different origin than the API. The host bans an IP
-// for 30 minutes after five rejected keys, so the page never retries a key the
-// host has rejected.
+// It can reuse the management key the control panel already saved in this
+// origin's localStorage, but only after the operator clicks the button that
+// offers it: the resource route is unauthenticated, so the page never spends a
+// stored credential without an explicit action. The key is held in memory and
+// is not written back to storage. The host bans an IP for 30 minutes after five
+// rejected keys, so the page never retries a key the host has rejected.
 const dashboardHTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -150,6 +150,9 @@ const dashboardHTML = `<!doctype html>
     <p id="gate-explain">The control panel did not leave a management key in this
        browser, so the speedometer needs one to read the management API. It is used only
        for the snapshot request to this server.</p>
+    <div class="row hidden" id="inherit-row">
+      <button id="inherit">Use the control panel's saved key</button>
+    </div>
     <label for="key">Management key</label>
     <input id="key" type="password" autocomplete="current-password" placeholder="management key">
     <div class="row">
@@ -263,7 +266,6 @@ const dashboardHTML = `<!doctype html>
 (function () {
   "use strict";
 
-  var KEY_STORE = "cpa-token-speedometer-key";
   var FORGET_STORE = "cpa-token-speedometer-forget";
   var POLL_MS = 2000;
   var state = { key: null, timer: null, stopped: false, series: [], dims: null };
@@ -756,7 +758,7 @@ const dashboardHTML = `<!doctype html>
   el("connect").addEventListener("click", function () {
     var key = el("key").value.trim();
     if (!key) { el("gate-status").textContent = "Enter the management key."; return; }
-    try { localStorage.setItem(KEY_STORE, key); localStorage.removeItem(FORGET_STORE); } catch (e) {}
+    try { localStorage.removeItem(FORGET_STORE); } catch (e) {}
     connect(key);
   });
 
@@ -764,10 +766,21 @@ const dashboardHTML = `<!doctype html>
     if (ev.key === "Enter") el("connect").click();
   });
 
+  // The key is never written back to storage. It lives in this page's memory
+  // for as long as the page is open, so closing the tab ends it. Persisting it
+  // would put a management credential in plaintext for any script on this
+  // origin, which is more exposure than the feature is worth.
+  el("inherit").addEventListener("click", function () {
+    var key = panelStoredKey();
+    if (!key) { el("gate-status").textContent = "The control panel has no saved key."; return; }
+    try { localStorage.removeItem(FORGET_STORE); } catch (e) {}
+    connect(key);
+  });
+
   // Forget stops the page and also stops it borrowing the panel's key again on
   // the next load; the panel's own saved session is left untouched.
   el("forget").addEventListener("click", function () {
-    try { localStorage.removeItem(KEY_STORE); localStorage.setItem(FORGET_STORE, "1"); } catch (e) {}
+    try { localStorage.setItem(FORGET_STORE, "1"); } catch (e) {}
     el("key").value = "";
     lockOut("Key forgotten");
   });
@@ -785,26 +798,28 @@ const dashboardHTML = `<!doctype html>
     resizeTimer = setTimeout(function () { drawChart(state.series); }, 120);
   });
 
-  var saved = null, forgot = false, inherited = null;
-  try {
-    saved = localStorage.getItem(KEY_STORE);
-    forgot = localStorage.getItem(FORGET_STORE) === "1";
-  } catch (e) {}
-  if (saved) {
-    el("key").value = saved;
-    connect(saved);
-  } else if (!forgot && (inherited = panelStoredKey())) {
-    // Borrow the key the control panel already saved for this origin. A
-    // rejection surfaces the gate without retrying, so it can never stack up
-    // toward the host's five-failure ban.
-    connect(inherited);
+  // Nothing is sent until the operator acts. The resource route is
+  // unauthenticated, so a page that reached out with a stored credential on
+  // load would let any link to this URL spend the panel's key without a
+  // deliberate click. The panel's key is offered as a button, never used
+  // automatically.
+  var forgot = false;
+  try { forgot = localStorage.getItem(FORGET_STORE) === "1"; } catch (e) {}
+
+  if (!forgot && panelStoredKey()) {
+    el("gate-explain").textContent =
+      "The control panel has saved a management key in this browser. Connect with it, " +
+      "or enter a different one below. The key is used only for the snapshot request " +
+      "to this server and is not written back to storage.";
+    el("inherit").textContent = "Use the control panel's saved key";
+    show("inherit-row", true);
   } else {
     el("gate-explain").textContent =
       "The control panel has not saved a management key in this browser, so the " +
       "speedometer needs one to read the management API. It is used only for the " +
-      "snapshot request to this server.";
-    show("gate", true);
+      "snapshot request to this server and is not written back to storage.";
   }
+  show("gate", true);
 })();
 </script>
 </body>
