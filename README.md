@@ -75,7 +75,10 @@ window resets; every other key takes effect without losing data.
 ## Endpoints
 
 - **Dashboard** - `/v0/resource/plugins/<plugin-id>/dashboard`, listed in the
-  plugin menu as "Token Speedometer". Self-contained, no external assets.
+  plugin menu as "Token Speedometer" under its gauge icon. Self-contained, no
+  external assets. The icon travels in the plugin metadata as an inline SVG
+  data URI, so the sidebar does not depend on GitHub or on any URL the host has
+  yet to assign.
 - **Snapshot** - `GET /v0/management/speedometer/snapshot`, optionally with
   `?window=15s` or `?window=15`. Returns:
 
@@ -222,7 +225,7 @@ from the filename, and the host disables any plugin that has no config entry.
 Requires Go 1.24+ and a C compiler (cgo).
 
 ```sh
-./build.sh                     # -> cliproxy-speedometer-v0.1.5.so (linux/amd64)
+./build.sh                     # -> cliproxy-speedometer-v0.1.6.so (linux/amd64)
 ARCH=arm64 ./build.sh          # native arm64 build
 ```
 

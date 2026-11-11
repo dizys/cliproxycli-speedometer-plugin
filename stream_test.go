@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -602,6 +603,34 @@ func TestManagementRegisterDeclaresRoutes(t *testing.T) {
 	}
 	if plugin.resourceBasePath != "/v0/resource/plugins/cliproxy-speedometer" {
 		t.Fatalf("resourceBasePath = %q", plugin.resourceBasePath)
+	}
+	// The panel draws a gear or plug glyph for a plugin with no logo, so the
+	// gauge mark has to reach it through metadata. It travels as an inline data
+	// URI because metadata is read at plugin.register, before the host has told
+	// the plugin which resource path it owns.
+	var reg2 pluginRegistration
+	rawReg, errReg := handleMethod(methodPluginRegister, []byte(`{"schema_version":6}`))
+	if errReg != nil {
+		t.Fatalf("plugin.register: %v", errReg)
+	}
+	var envReg envelope
+	if err := json.Unmarshal(rawReg, &envReg); err != nil {
+		t.Fatalf("decode register: %v", err)
+	}
+	if err := json.Unmarshal(envReg.Result, &reg2); err != nil {
+		t.Fatalf("decode registration: %v", err)
+	}
+	logo := reg2.Metadata.Logo
+	const prefix = "data:image/svg+xml;base64,"
+	if !strings.HasPrefix(logo, prefix) {
+		t.Fatalf("logo = %q, want an inline svg data URI", logo)
+	}
+	svg, errDecode := base64.StdEncoding.DecodeString(strings.TrimPrefix(logo, prefix))
+	if errDecode != nil {
+		t.Fatalf("decode logo: %v", errDecode)
+	}
+	if !strings.HasPrefix(string(svg), "<svg") {
+		t.Fatalf("logo payload is not an svg: %q", svg[:20])
 	}
 }
 

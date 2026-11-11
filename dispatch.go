@@ -35,7 +35,7 @@ const (
 // pluginVersion is overridden at build time with -X main.pluginVersion=<version>
 // so the version a release reports matches its filename and release tag. The
 // fallback only applies to a bare `go build`.
-var pluginVersion = "0.1.5"
+var pluginVersion = "0.1.6"
 
 // plugin is the process-wide singleton. The host loads one shared library per
 // plugin instance, so package-level state is the correct scope.
@@ -115,6 +115,7 @@ func handleRegister(req []byte) ([]byte, error) {
 			Version:          pluginVersion,
 			Author:           pluginAuthor,
 			GitHubRepository: pluginRepo,
+			Logo:             iconDataURI(),
 			ConfigFields:     configFields(),
 		},
 		Capabilities: rpcCapabilities{

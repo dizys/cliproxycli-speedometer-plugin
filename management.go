@@ -1,6 +1,8 @@
 package main
 
 import (
+	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -15,6 +17,22 @@ const (
 	snapshotPath  = "/speedometer/snapshot"
 	dashboardPath = "/dashboard"
 )
+
+// iconSVG is the gauge mark the control panel shows beside this plugin. It is
+// embedded rather than linked, because the dashboard is already a single
+// self-contained document and the icon should not depend on GitHub staying
+// reachable or on a branch name that can move.
+//
+//go:embed assets/icon.svg
+var iconSVG []byte
+
+// iconDataURI renders iconSVG as a data: URI. The host only reads metadata at
+// plugin.register, before management.register tells the plugin its own resource
+// path, so a self-contained URI is the only way to show the icon without
+// hardcoding a URL that the host has not yet assigned.
+func iconDataURI() string {
+	return "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(iconSVG)
+}
 
 // handleManagementRegister declares one JSON route plus the dashboard resource.
 func handleManagementRegister(req []byte) ([]byte, error) {
