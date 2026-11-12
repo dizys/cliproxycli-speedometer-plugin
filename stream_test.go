@@ -1054,4 +1054,14 @@ func TestDashboardSizesBarsFromThePrintedRate(t *testing.T) {
 	if !strings.Contains(body, "r.live_per_second") {
 		t.Fatal("in-flight table does not print the live pace")
 	}
+	// The table must say which total it reconciles to. A reader who adds the
+	// column up and compares it with the headline will otherwise conclude the
+	// numbers are wrong, because committed work from finished requests is
+	// missing from a table of open streams by definition.
+	if !strings.Contains(body, "live estimate tile") {
+		t.Fatal("in-flight note does not name the tile its column reconciles to")
+	}
+	if !strings.Contains(body, "inflight-foot") || !strings.Contains(body, "inflight-recon") {
+		t.Fatal("in-flight card does not print its own totals and reconciliation")
+	}
 }

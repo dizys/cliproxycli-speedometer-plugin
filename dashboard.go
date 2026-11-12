@@ -139,6 +139,9 @@ const dashboardHTML = `<!doctype html>
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .status { font-size: 12px; color: var(--text-muted); }
   .inflight-note { margin: -4px 0 10px; line-height: 1.45; }
+  tfoot td { border-top: 1px solid var(--axis); border-bottom: none; font-weight: 600; color: var(--text-primary); }
+  .inflight-recon { margin: 10px 0 0; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .inflight-recon b { color: var(--text-primary); font-weight: 600; }
   .status.err { color: var(--critical); }
   .hidden { display: none !important; }
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -239,9 +242,12 @@ const dashboardHTML = `<!doctype html>
       <h2>Streams in flight</h2>
       <span class="status" id="inflight-count"></span>
     </div>
-    <p class="status inflight-note">Tok/s now is each stream's pace over the last
-       few seconds, the same measurement the live estimate sums, so the column
-       adds up to it. Tokens is the stream's running total.</p>
+    <p class="status inflight-note">An in-flight stream is only one that is still
+       open. Its Tok/s now is that stream's pace over the last few seconds, the
+       same measurement the live estimate sums, so this column adds up to the
+       <b>live estimate tile</b> and not to the headline. The rest of the
+       headline is committed work: requests that already finished inside the
+       window and left this table. Tokens is the stream's running total.</p>
     <table>
       <thead>
         <tr>
@@ -250,8 +256,10 @@ const dashboardHTML = `<!doctype html>
         </tr>
       </thead>
       <tbody id="inflight-body"></tbody>
+      <tfoot id="inflight-foot"></tfoot>
     </table>
     <div class="empty hidden" id="inflight-empty">No streams open.</div>
+    <p class="inflight-recon" id="inflight-recon"></p>
   </section>
 
   <section class="card hidden" id="table-card">
@@ -488,7 +496,7 @@ const dashboardHTML = `<!doctype html>
     state.dims = d.dimensions || {};
     drawChart(state.series);
     renderDims(state.dims);
-    renderInflight(d.inflight || []);
+    renderInflight(d.inflight || [], d);
     renderTable(d);
   }
 
@@ -538,13 +546,20 @@ const dashboardHTML = `<!doctype html>
     });
   }
 
-  function renderInflight(rows) {
+  function renderInflight(rows, d) {
+    var rate = d.rate || { committed: 0, live: 0, total: 0 };
     var body = el("inflight-body");
     body.textContent = "";
+    var foot = el("inflight-foot");
+    foot.textContent = "";
     el("inflight-count").textContent = rows.length ? rows.length + " open" : "";
     show("inflight-empty", rows.length === 0);
-    rows.slice(0, 12).forEach(function (r) {
-      var tr = document.createElement("tr");
+    var shown = rows.slice(0, 12);
+    var sumLive = 0;
+    var sumTokens = 0;
+    shown.forEach(function (r) {
+      sumLive += r.live_per_second || 0;
+      sumTokens += (r.counters || {}).tokens || 0;      var tr = document.createElement("tr");
       var cells = [
         r.provider || "—",
         r.model || "—",
@@ -561,6 +576,50 @@ const dashboardHTML = `<!doctype html>
       });
       body.appendChild(tr);
     });
+
+    // The footer states the arithmetic the note claims, so a reader does not
+    // have to add the column up themselves to check that it reconciles.
+    if (shown.length) {
+      var ftr = document.createElement("tr");
+      var label = document.createElement("td");
+      label.colSpan = 4;
+      label.textContent = rows.length > shown.length
+        ? "Total, first " + shown.length + " of " + rows.length + " open"
+        : "Total, all open streams";
+      ftr.appendChild(label);
+      [fmt(sumTokens), fmt(sumLive)].forEach(function (text) {
+        var td = document.createElement("td");
+        td.className = "num";
+        td.textContent = text;
+        ftr.appendChild(td);
+      });
+      foot.appendChild(ftr);
+    }
+
+    // Show the split explicitly. The gap between the headline and the live
+    // tile is committed work from requests that already finished, and it is
+    // the single thing that makes the table look short.
+    var live = rate.live || 0;
+    var committed = rate.committed || 0;
+    var recon = el("inflight-recon");
+    recon.textContent = "";
+    var add = function (text, strong) {
+      var node = document.createElement(strong ? "b" : "span");
+      node.textContent = text;
+      recon.appendChild(node);
+    };
+    add("Open streams add up to ");
+    add(fmt(sumLive) + " tok/s", true);
+    add(", which is the ");
+    add("live estimate", true);
+    add(" tile");
+    if (rows.length > shown.length) add(" (only the first " + shown.length + " of " + rows.length + " are listed)");
+    add(". Committed work from requests that finished inside the " +
+        fmtDur(d.window_seconds || 0) + " window adds ");
+    add(fmt(committed) + " tok/s", true);
+    add(". Headline: ");
+    add(fmt(live) + " + " + fmt(committed) + " = " + fmt(rate.total || 0) + " tok/s", true);
+    add(".");
   }
 
   function shortHash(hash) {

@@ -131,15 +131,25 @@ they are not meant to be added together or compared directly:
 
 | Surface | What it measures |
 |---|---|
+| Headline | `rate.committed` plus `rate.live`, the two numbers beside it |
 | Headline **live estimate** | generated tokens over the last `live_window_seconds`, divided by that horizon |
 | Per-dimension `rate` | committed tokens over `window_seconds`, plus live tokens over the live window |
 | In-flight **Tok/s now** | one stream's pace over the live window |
 
 The in-flight column is `live_per_second`, and the open streams add up to
-`rate.live`: that is the reconciliation between the two cards. The stream's
-lifetime average is reported separately as `tokens_per_second` in the same JSON,
-but the table does not show it, because a stream that ran long and is now
-stalled would outrank a fast one and could never sum to a live figure.
+`rate.live`: that is the reconciliation between the two cards, and the card
+prints the sum so it can be checked without adding the column by hand. It will
+not add up to the headline, and that is not an error. A request that finished
+leaves the table and its generated tokens stay in the window's committed total,
+so the headline is the open streams plus work that already completed. In a
+snapshot of 279 tok/s whose three open streams show 34.2, the other 245 is
+committed work from requests that finished inside the window; the dashboard
+spells this out under the table.
+
+The stream's lifetime average is reported separately as `tokens_per_second` in
+the same JSON, but the table does not show it, because a stream that ran long
+and is now stalled would outrank a fast one and could never sum to a live
+figure.
 
 A dimension row therefore reports `counters.generated` for its committed,
 exact work and `live` for the part still estimated from open streams. Its `rate`
@@ -225,7 +235,7 @@ from the filename, and the host disables any plugin that has no config entry.
 Requires Go 1.24+ and a C compiler (cgo).
 
 ```sh
-./build.sh                     # -> cliproxy-speedometer-v0.1.6.so (linux/amd64)
+./build.sh                     # -> cliproxy-speedometer-v0.1.7.so (linux/amd64)
 ARCH=arm64 ./build.sh          # native arm64 build
 ```
 
