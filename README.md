@@ -195,6 +195,16 @@ The key is held in page memory for the lifetime of the tab and is not written
 back to storage. **Use a different key** drops the borrowed key, shows the form,
 and stops this browser reusing the panel's key on later loads.
 
+That opt-out, and the block left behind when a stored key is rejected, are stored
+as a small record under `cpa-token-speedometer-forget`: the reason (`rejected` or
+`opted-out`) and a fingerprint of the panel's stored session. Binding it to the
+session is what keeps it from becoming permanent. The block lasts until the key
+works again or until the panel writes a new session, either of which clears it,
+so logging in to the panel is enough to get reuse back. A hand-typed key that
+connects also clears it, unconditionally; gating that clear on the key having
+come from the panel is what made v0.1.3 through v0.1.7 ask for a key on every
+load after a single rejection or opt-out.
+
 The page sends `Authorization: Bearer <management key>` and stops polling on a
 401/403/429 instead of retrying, so a rejected key can never contribute to the
 host's per-IP management ban. A rejected remembered key is also marked so the
@@ -235,7 +245,7 @@ from the filename, and the host disables any plugin that has no config entry.
 Requires Go 1.24+ and a C compiler (cgo).
 
 ```sh
-./build.sh                     # -> cliproxy-speedometer-v0.1.7.so (linux/amd64)
+./build.sh                     # -> cliproxy-speedometer-v0.1.8.so (linux/amd64)
 ARCH=arm64 ./build.sh          # native arm64 build
 ```
 

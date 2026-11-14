@@ -392,6 +392,70 @@ const dashboardHTML = `<!doctype html>
 
   function show(id, on) { el(id).classList.toggle("hidden", !on); }
 
+  // --- opt-out and rejection marker --------------------------------------
+  // FORGET_STORE records why automatic reuse is off. It carries the reason and
+  // a fingerprint of the panel's stored session, because the two reasons expire
+  // differently: a rejected key must be retried once the operator has logged
+  // into the panel again, and an explicit opt-out must survive reloads but not
+  // a fresh panel login, which is a newer decision than the click was.
+  //
+  // A bare boolean here was a deadlock. The only path that cleared it required
+  // the key to have come from the panel, but the marker itself forces the page
+  // onto the manual form, so nothing could ever clear it: one rejected key, or
+  // one click on "Use a different key", made the page ask on every load for
+  // good. Binding the marker to the session it was made against breaks that.
+  function panelBlob() {
+    try { return localStorage.getItem(PANEL_STORE) || ""; } catch (e) { return ""; }
+  }
+
+  // panelBlobKey fingerprints the stored ciphertext. It is not a secret: the
+  // ciphertext already sits in this origin's storage, and nothing is derived
+  // from the management key itself. It exists only to notice a new session.
+  function panelBlobKey() {
+    var s = panelBlob(), h = 2166136261;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
+    return h.toString(16);
+  }
+
+  function forgetRecord() {
+    var raw = null;
+    try { raw = localStorage.getItem(FORGET_STORE); } catch (e) { return null; }
+    if (!raw) return null;
+    try {
+      var rec = JSON.parse(raw);
+      if (rec && typeof rec === "object" && typeof rec.why === "string") return rec;
+    } catch (e) {}
+    // The pre-0.1.8 marker was the string "1" with no reason and no session.
+    // Its cause cannot be recovered and its behaviour was this bug, so it is
+    // reported as absent and cleared by the caller.
+    return { legacy: true };
+  }
+
+  function setForget(why) {
+    try {
+      localStorage.setItem(FORGET_STORE, JSON.stringify({ why: why, blob: panelBlobKey() }));
+    } catch (e) {}
+  }
+
+  function clearForget() {
+    try { localStorage.removeItem(FORGET_STORE); } catch (e) {}
+  }
+
+  // skipPanelKey reports whether the page should refuse to reuse the panel's
+  // key, clearing any marker that no longer applies.
+  function skipPanelKey() {
+    var rec = forgetRecord();
+    if (!rec) return { skip: false, why: "" };
+    if (rec.legacy) { clearForget(); return { skip: false, why: "" }; }
+    if (!rec.blob || rec.blob !== panelBlobKey()) {
+      // Bound to a session the panel has since replaced. The operator logged in
+      // again, which supersedes the earlier rejection or opt-out.
+      clearForget();
+      return { skip: false, why: "" };
+    }
+    return { skip: true, why: rec.why };
+  }
+
   function stopPolling(reason, isError) {
     state.stopped = true;
     if (state.timer) { clearTimeout(state.timer); state.timer = null; }
@@ -435,11 +499,11 @@ const dashboardHTML = `<!doctype html>
         });
       }
       if (!resp.ok) throw new Error("HTTP " + resp.status);
-      // A key that worked is safe to reuse; clear any earlier block so a fixed
-      // key does not leave this browser stuck on the form.
-      if (state.remembered) {
-        try { localStorage.removeItem(FORGET_STORE); } catch (e) {}
-      }
+      // The key works, so a marker left by an older rejection no longer applies.
+      // Ungated deliberately: a hand-typed key reaching here has also proved the
+      // page and the host are fine, and clearing must never depend on the key
+      // having come from the panel, which is what made the marker permanent.
+      clearForget();
       return resp.json().then(render).then(schedule);
     }).catch(function (err) {
       // A transport failure is transient; keep trying but say so.
@@ -453,12 +517,9 @@ const dashboardHTML = `<!doctype html>
     el("meta").textContent = "not connected";
     show("gate", true);
     // A key that just failed must not be offered again on reload, or every
-    // visit would spend another attempt against the host's failure ban. A key
-    // the operator typed is not affected: it is never persisted in the first
-    // place.
-    if (state.remembered) {
-      try { localStorage.setItem(FORGET_STORE, "1"); } catch (e) {}
-    }
+    // visit would spend another attempt against the host's failure ban. The
+    // marker is bound to the current panel session so a later login clears it.
+    setForget("rejected");
     el("gate-explain").textContent =
       "The key was rejected. Enter a management key to read the management API.";
     show("conn", false);
@@ -895,7 +956,7 @@ const dashboardHTML = `<!doctype html>
   el("switch-key").addEventListener("click", function () {
     state.stopped = true;
     if (state.timer) { clearTimeout(state.timer); state.timer = null; }
-    try { localStorage.setItem(FORGET_STORE, "1"); } catch (e) {}
+    setForget("opted-out");
     state.key = null;
     el("gate-status").textContent = "";
     el("key").value = "";
@@ -928,19 +989,25 @@ const dashboardHTML = `<!doctype html>
   // choice, not a fresh one made by whoever opened the URL, and the page sends
   // nothing when no remembered key exists. A key belonging to another origin is
   // rejected by panelStoredKey and is never used.
-  var forgot = false;
-  try { forgot = localStorage.getItem(FORGET_STORE) === "1"; } catch (e) {}
+  var skip = skipPanelKey();
 
-  var savedKey = forgot ? null : panelStoredKey();
+  var savedKey = skip.skip ? null : panelStoredKey();
   if (savedKey && panelRemembered()) {
     connect(savedKey, true);
   } else {
-    el("gate-explain").textContent = savedKey
-      ? "The control panel holds a key for this server but was not asked to remember it. " +
-        "Enter it below to read the management API."
-      : "The control panel has not saved a management key in this browser, so the " +
-        "speedometer needs one to read the management API. It is used only for the " +
-        "snapshot request to this server and is not written back to storage.";
+    el("gate-explain").textContent = skip.skip
+      ? (skip.why === "rejected"
+          ? "A stored key was rejected earlier, so it is not being retried. " +
+            "Enter a management key, or log in to the control panel again to " +
+            "clear this and reuse the key it keeps."
+          : "This browser was told not to reuse the panel's key. Clear that by " +
+            "logging in to the control panel again, or enter a key below.")
+      : (savedKey
+          ? "The control panel holds a key for this server but was not asked to remember it. " +
+            "Enter it below to read the management API."
+          : "The control panel has not saved a management key in this browser, so the " +
+            "speedometer needs one to read the management API. It is used only for the " +
+            "snapshot request to this server and is not written back to storage.");
     show("gate", true);
   }
 })();

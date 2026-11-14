@@ -1024,6 +1024,71 @@ func TestDashboardRequiresRememberedPanelKey(t *testing.T) {
 	}
 }
 
+// A marker that disables key reuse must be clearable, or one rejection or one
+// click on "Use a different key" makes the page ask on every load forever.
+//
+// v0.1.3 shipped exactly that deadlock: the marker was set by both paths, but
+// the only statement that removed it ran on a successful poll and was gated on
+// the key having come from the panel. The marker itself forces the manual form,
+// which never sets that flag, so nothing could reach the clear. The symptom is
+// indistinguishable from "the panel stopped remembering my key".
+func TestForgetMarkerCanAlwaysBeCleared(t *testing.T) {
+	body := dashboardForTest(t)
+
+	// A successful poll must clear the marker unconditionally. Gating this on
+	// state.remembered is the deadlock itself.
+	if strings.Contains(body, "if (state.remembered) {\n        try { localStorage.removeItem(FORGET_STORE)") {
+		t.Fatal("marker clear is gated on state.remembered, which the marker's own presence prevents")
+	}
+	if !strings.Contains(body, "clearForget();") {
+		t.Fatal("dashboard has no unconditional marker clear")
+	}
+	// The marker must carry a reason and the panel session it was made against.
+	// A bare "1" cannot distinguish a rejection from an opt-out, and cannot
+	// expire when the operator logs in again.
+	if !strings.Contains(body, "why: why") || !strings.Contains(body, "blob: panelBlobKey()") {
+		t.Fatal("marker does not record its reason and the session it applies to")
+	}
+	// A marker from an older version must be discarded rather than honoured:
+	// its cause is unknowable and its behaviour was the bug.
+	if !strings.Contains(body, "rec.legacy") {
+		t.Fatal("dashboard does not discard the legacy boolean marker")
+	}
+}
+
+// The marker must expire when the panel writes a new session. A rejection made
+// against one key must not disable reuse against the next one the operator
+// logs in with.
+func TestForgetMarkerExpiresWithThePanelSession(t *testing.T) {
+	body := dashboardForTest(t)
+	if !strings.Contains(body, "rec.blob !== panelBlobKey()") {
+		t.Fatal("marker is not bound to the panel session that produced it")
+	}
+	// Binding it must lead to a clear, not to silently ignoring the marker
+	// while leaving it in storage to block a later load.
+	if !strings.Contains(body, "clearForget();\n      return { skip: false") {
+		t.Fatal("a stale marker is not cleared when the session changes")
+	}
+}
+
+func dashboardForTest(t *testing.T) string {
+	t.Helper()
+	resetPlugin(t)
+	if _, err := handleMethod(methodManagementRegister, []byte(`{"BasePath":"/v0/management","ResourceBasePath":"/v0/resource/plugins/x"}`)); err != nil {
+		t.Fatalf("management.register: %v", err)
+	}
+	raw, err := handleMethod(methodManagementHandle, []byte(`{"Method":"GET","Path":"/v0/resource/plugins/x/dashboard"}`))
+	if err != nil {
+		t.Fatalf("management.handle: %v", err)
+	}
+	env := decodeEnvelope(t, raw)
+	var resp managementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return string(resp.Body)
+}
+
 // The bar length and the number printed beside it must come from the same
 // counter. Sizing a bar from the committed total while printing a rate that
 // includes the live estimate lets a row be shorter than its own label claims.
